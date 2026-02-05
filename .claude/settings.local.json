@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:mplsoccer.readthedocs.io)",
+      "WebFetch(domain:github.com)",
+      "Bash(dir:*)",
+      "Bash(python -c:*)",
+      "Bash(taskkill:*)",
+      "Bash(tasklist:*)",
+      "Bash(findstr:*)",
+      "Bash(cmd /c \"taskkill /F /PID 30320\")",
+      "Bash(powershell -Command:*)",
+      "Bash(pip install:*)"
+    ]
+  }
+}
