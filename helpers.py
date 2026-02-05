@@ -867,6 +867,264 @@ def try_read_json(uploaded_file):
         st.error(f"An unexpected error occurred: {e}")
         st.stop()  # Stop further execution if columns are missing
 
+# ==================== MULTI-MATCH AGGREGATION ====================
+
+def aggregate_matches(dataframes, match_names=None):
+    """
+    Aggregate multiple match dataframes into one with match_id tracking.
+
+    Args:
+        dataframes: List of DataFrames from different matches
+        match_names: Optional list of match names for identification
+
+    Returns:
+        Combined DataFrame with match_id column
+    """
+    combined_dfs = []
+
+    for i, df in enumerate(dataframes):
+        df_copy = df.copy()
+        df_copy['match_id'] = i
+        df_copy['match_name'] = match_names[i] if match_names and i < len(match_names) else f"Match {i+1}"
+        combined_dfs.append(df_copy)
+
+    return pd.concat(combined_dfs, ignore_index=True)
+
+
+def player_season_summary(df, player, team, num_matches=None):
+    """
+    Create a radar chart showing aggregated player stats across multiple matches.
+    Stats are normalized per 90 minutes for fair comparison.
+    """
+    player_events = df[(df['player'] == player) & (df['team'] == team)]
+
+    if player_events.empty:
+        st.warning(f"No data available for {player}")
+        fig, ax = plt.subplots(figsize=(10, 10))
+        return fig, ax
+
+    # Calculate total minutes (approximate from match data)
+    if num_matches is None:
+        num_matches = df['match_id'].nunique() if 'match_id' in df.columns else 1
+
+    # Approximate minutes played (90 per match as default)
+    total_minutes = num_matches * 90
+
+    # Calculate raw stats
+    # Passes
+    passes = player_events[player_events['type'] == 'Pass']
+    total_passes = len(passes)
+    completed_passes = len(passes[passes['pass_outcome'].isnull()])
+    pass_accuracy = round((completed_passes / total_passes * 100), 1) if total_passes > 0 else 0
+
+    # Forward passes
+    passes_with_loc = passes.dropna(subset=['location', 'pass_end_location'])
+    if not passes_with_loc.empty:
+        locations = passes_with_loc['location'].tolist()
+        end_locations = passes_with_loc['pass_end_location'].tolist()
+        forward_passes = sum(1 for i, loc in enumerate(locations) if end_locations[i][0] > loc[0])
+    else:
+        forward_passes = 0
+
+    # Shots & Goals
+    shots = player_events[player_events['type'] == 'Shot']
+    total_shots = len(shots)
+    goals = len(shots[shots['shot_outcome'] == 'Goal'])
+    xg = shots['shot_statsbomb_xg'].sum() if not shots.empty else 0
+
+    # Dribbles
+    dribbles = player_events[player_events['type'] == 'Dribble']
+    total_dribbles = len(dribbles)
+    successful_dribbles = len(dribbles[dribbles['dribble_outcome'] == 'Complete'])
+
+    # Carries
+    carries = player_events[player_events['type'] == 'Carry'].dropna(subset=['location', 'carry_end_location'])
+    total_carries = len(carries)
+    if not carries.empty:
+        locations = carries['location'].tolist()
+        end_locations = carries['carry_end_location'].tolist()
+        progressive_carries = sum(1 for i, loc in enumerate(locations) if end_locations[i][0] > loc[0])
+    else:
+        progressive_carries = 0
+
+    # Defensive actions
+    ball_recoveries = len(player_events[player_events['type'] == 'Ball Recovery'])
+    defensive_actions = len(player_events[player_events['type'].isin(['Tackle', 'Interception', 'Clearance'])])
+
+    # Calculate per 90 stats
+    per_90_multiplier = 90 / total_minutes if total_minutes > 0 else 1
+
+    stats_per_90 = {
+        'Passes': round(completed_passes * per_90_multiplier, 1),
+        'Forward Passes': round(forward_passes * per_90_multiplier, 1),
+        'Shots': round(total_shots * per_90_multiplier, 2),
+        'Goals': round(goals * per_90_multiplier, 2),
+        'xG': round(xg * per_90_multiplier, 2),
+        'Dribbles Won': round(successful_dribbles * per_90_multiplier, 1),
+        'Carries': round(total_carries * per_90_multiplier, 1),
+        'Prog. Carries': round(progressive_carries * per_90_multiplier, 1),
+        'Ball Recoveries': round(ball_recoveries * per_90_multiplier, 1),
+        'Def. Actions': round(defensive_actions * per_90_multiplier, 1),
+    }
+
+    # Raw totals for display
+    raw_stats = {
+        'Matches': num_matches,
+        'Minutes (approx)': total_minutes,
+        'Total Passes': completed_passes,
+        'Pass Accuracy': f"{pass_accuracy}%",
+        'Total Goals': goals,
+        'Total xG': round(xg, 2),
+        'xG Difference': f"{'+' if goals - xg > 0 else ''}{round(goals - xg, 2)}",
+    }
+
+    # Create radar chart
+    radar_metrics = list(stats_per_90.keys())
+    values = list(stats_per_90.values())
+
+    # Set ranges (min=0, max based on reasonable benchmarks with buffer)
+    low = [0] * len(radar_metrics)
+    high = [max(v * 1.5, 1) for v in values]  # 50% buffer above actual values
+
+    radar = Radar(radar_metrics, low, high,
+                  round_int=[False] * len(radar_metrics),
+                  num_rings=4,
+                  ring_width=1,
+                  center_circle_radius=1)
+
+    fig, axs = radar.setup_axis()
+    fig.set_facecolor('#1a1a2e')
+
+    rings_inner = radar.draw_circles(ax=axs, facecolor='#1a1a2e', edgecolor='#ffffff', alpha=0.1)
+    radar_output = radar.draw_radar(values, ax=axs,
+                                     kwargs_radar={'facecolor': '#E74C3C', 'alpha': 0.6},
+                                     kwargs_rings={'facecolor': '#E74C3C', 'alpha': 0.1})
+
+    radar.draw_range_labels(ax=axs, fontsize=8, color='#ffffff', alpha=0.7)
+    radar.draw_param_labels(ax=axs, fontsize=10, color='#ffffff')
+
+    # Title
+    title = f'{player} - Season Summary'
+    fig.text(0.5, 0.97, title, ha='center', va='top', fontsize=16,
+             color='#ffffff', fontweight='bold')
+    fig.text(0.5, 0.93, f'{num_matches} matches | Stats per 90 minutes',
+             ha='center', va='top', fontsize=11, color='#ffffff', alpha=0.8)
+
+    # Endnote
+    fig.text(0.5, 0.02, '@alex.mrl38', ha='center', va='bottom',
+             fontsize=9, color='#ffffff', alpha=0.5)
+
+    # Display metrics in Streamlit
+    st.markdown("##### Season Totals")
+    cols = st.columns(4)
+    for i, (key, value) in enumerate(raw_stats.items()):
+        cols[i % 4].metric(key, value)
+
+    st.markdown("##### Per 90 Minutes")
+    cols2 = st.columns(5)
+    for i, (key, value) in enumerate(stats_per_90.items()):
+        cols2[i % 5].metric(key, value)
+
+    return fig, axs
+
+
+def performance_trend(df, player, team, stat_type='xG'):
+    """
+    Create a line chart showing player performance trend across matches.
+
+    Args:
+        df: DataFrame with match_id column
+        player: Player name
+        team: Team name
+        stat_type: 'xG', 'Goals', 'Passes', 'Dribbles'
+    """
+    if 'match_id' not in df.columns:
+        st.warning("Match tracking not available. Upload multiple matches for trend analysis.")
+        fig, ax = plt.subplots(figsize=(12, 6))
+        return fig, ax
+
+    player_events = df[(df['player'] == player) & (df['team'] == team)]
+
+    if player_events.empty:
+        st.warning(f"No data available for {player}")
+        fig, ax = plt.subplots(figsize=(12, 6))
+        return fig, ax
+
+    # Group by match
+    match_stats = []
+    for match_id in sorted(df['match_id'].unique()):
+        match_events = player_events[player_events['match_id'] == match_id]
+        match_name = df[df['match_id'] == match_id]['match_name'].iloc[0] if 'match_name' in df.columns else f"M{match_id+1}"
+
+        if stat_type == 'xG':
+            shots = match_events[match_events['type'] == 'Shot']
+            value = shots['shot_statsbomb_xg'].sum() if not shots.empty else 0
+        elif stat_type == 'Goals':
+            shots = match_events[match_events['type'] == 'Shot']
+            value = len(shots[shots['shot_outcome'] == 'Goal'])
+        elif stat_type == 'Passes':
+            passes = match_events[match_events['type'] == 'Pass']
+            value = len(passes[passes['pass_outcome'].isnull()])
+        elif stat_type == 'Dribbles':
+            dribbles = match_events[match_events['type'] == 'Dribble']
+            value = len(dribbles[dribbles['dribble_outcome'] == 'Complete'])
+        else:
+            value = 0
+
+        match_stats.append({
+            'match_id': match_id,
+            'match_name': match_name,
+            'value': value
+        })
+
+    stats_df = pd.DataFrame(match_stats)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, 6))
+    fig.set_facecolor('#1a1a2e')
+    ax.set_facecolor('#1a1a2e')
+
+    # Plot line
+    ax.plot(range(len(stats_df)), stats_df['value'], color='#E74C3C', linewidth=2.5, marker='o', markersize=8)
+
+    # Add average line
+    avg = stats_df['value'].mean()
+    ax.axhline(y=avg, color='#3498DB', linestyle='--', alpha=0.7, label=f'Average: {avg:.2f}')
+
+    # Fill area under curve
+    ax.fill_between(range(len(stats_df)), stats_df['value'], alpha=0.3, color='#E74C3C')
+
+    # Styling
+    ax.set_xlabel('Match', color='#ffffff', fontsize=12)
+    ax.set_ylabel(stat_type, color='#ffffff', fontsize=12)
+    ax.set_xticks(range(len(stats_df)))
+    ax.set_xticklabels([f"M{i+1}" for i in range(len(stats_df))], color='#ffffff', fontsize=9)
+    ax.tick_params(colors='#ffffff')
+    ax.spines['bottom'].set_color('#ffffff')
+    ax.spines['left'].set_color('#ffffff')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.grid(True, alpha=0.2, color='#ffffff')
+    ax.legend(loc='upper right', facecolor='#1a1a2e', edgecolor='#ffffff', labelcolor='#ffffff')
+
+    # Title
+    ax.set_title(f'{player} - {stat_type} Trend', color='#ffffff', fontsize=16, fontweight='bold', pad=15)
+
+    # Endnote
+    fig.text(0.95, 0.02, '@alex.mrl38', ha='right', va='bottom', fontsize=9, color='#ffffff', alpha=0.5)
+
+    plt.tight_layout()
+
+    # Display metrics
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total", round(stats_df['value'].sum(), 2))
+    col2.metric("Average", round(avg, 2))
+    col3.metric("Best", round(stats_df['value'].max(), 2))
+    col4.metric("Matches", len(stats_df))
+
+    return fig, ax
+
+
 # ==================== PDF EXPORT ====================
 
 def generate_pdf_report(fig, df, match, analysis_type, player=None, team=None,

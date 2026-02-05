@@ -11,7 +11,9 @@ from statsbombpy import sb
 from io import BytesIO
 from helpers import (passes_map, heatmap, shots_map, carries_map, dribbles_map,
                      pass_network, xg_timeline, match_summary, player_comparison_radar,
-                     check_required_columns, try_read_json, generate_pdf_report, PDF_AVAILABLE)
+                     check_required_columns, try_read_json, generate_pdf_report, PDF_AVAILABLE,
+                     aggregate_matches, player_season_summary, performance_trend)
+import pandas as pd
 
 # Set page config
 st.set_page_config(page_title='Football Data Analysis', page_icon=':soccer:', initial_sidebar_state='expanded')
@@ -29,113 +31,175 @@ required_columns = ['team', 'player', 'location',
 PLAYER_STATS = ['Passes', 'Shots', 'Heatmap', 'Carries', 'Dribbles']
 TEAM_STATS = ['Match Summary', 'Pass Network', 'xG Timeline']
 COMPARISON_STATS = ['Player Radar']
+MULTI_MATCH_STATS = ['Season Summary', 'Performance Trend']
 
-# File upload
-uploaded_file = st.sidebar.file_uploader("Upload your own data", type='json')
-if uploaded_file is not None:
-    df_uploaded = try_read_json(uploaded_file)
+# Data mode selection
+data_mode = st.sidebar.radio('Data Mode', ['Single Match', 'Multi-Match'], horizontal=True,
+                              help="Single Match: Analyze one game. Multi-Match: Aggregate stats across multiple games.")
 
-    if df_uploaded is not None:
-        # Vérification des colonnes
-        is_valid, missing_info = check_required_columns(df_uploaded, required_columns)
+# Multi-Match mode
+if data_mode == 'Multi-Match':
+    st.sidebar.markdown("#### Upload Multiple Matches")
+    uploaded_files = st.sidebar.file_uploader("Upload JSON files", type='json', accept_multiple_files=True)
 
-        if not is_valid:
-            st.error(f"Data Error: {missing_info}")
-            st.stop()  # Stop further execution if columns are missing
+    if uploaded_files and len(uploaded_files) > 0:
+        # Load all files
+        dataframes = []
+        match_names = []
+        for i, file in enumerate(uploaded_files):
+            df = try_read_json(file)
+            if df is not None:
+                is_valid, missing_info = check_required_columns(df, required_columns)
+                if is_valid:
+                    dataframes.append(df)
+                    match_names.append(file.name.replace('.json', ''))
+                else:
+                    st.sidebar.warning(f"Skipped {file.name}: {missing_info}")
+
+        if len(dataframes) > 0:
+            # Aggregate data
+            df_events = aggregate_matches(dataframes, match_names)
+            num_matches = len(dataframes)
+
+            st.sidebar.success(f"{num_matches} matches loaded")
+
+            # Get unique players across all matches
+            teams = df_events['team'].dropna().unique()
+            menu_team = st.sidebar.selectbox('Select a Team', teams)
+            players = df_events[df_events['team'] == menu_team]['player'].dropna().unique()
+            menu_player = st.sidebar.selectbox('Select a Player', players)
+
+            # Multi-match specific stats
+            menu_activity = st.sidebar.selectbox('Select a Statistic', MULTI_MATCH_STATS)
+
+            if menu_activity == 'Performance Trend':
+                trend_stat = st.sidebar.selectbox('Metric to Track', ['xG', 'Goals', 'Passes', 'Dribbles'])
+            else:
+                trend_stat = None
+
+            menu_game = f"{num_matches} Matches"
+            menu_player2 = None
+            menu_team2 = None
+            is_multi_match = True
         else:
-            # Extraction des équipes et joueurs
-            teams_uploaded = df_uploaded['team'].dropna().unique()
-            players_uploaded = df_uploaded[df_uploaded['team'] == teams_uploaded[0]]['player'].dropna().unique()
+            st.sidebar.error("No valid files loaded")
+            st.stop()
+    else:
+        st.sidebar.info("Upload 2+ JSON files to analyze player performance across matches")
+        st.stop()
 
-            # Choose analysis level
-            analysis_level = st.sidebar.radio('Analysis Level', ['Player', 'Team', 'Comparison'], horizontal=True)
+# Single Match mode
+else:
+    is_multi_match = False
+    trend_stat = None
+    num_matches = 1
 
-            # Team selection
-            menu_team = st.sidebar.selectbox('Select a Team', teams_uploaded)
+    # File upload
+    uploaded_file = st.sidebar.file_uploader("Upload your own data", type='json')
+    if uploaded_file is not None:
+        df_uploaded = try_read_json(uploaded_file)
 
-            # Player selection (only for Player level)
-            if analysis_level == 'Player':
-                menu_player = st.sidebar.selectbox('Select a Player', df_uploaded[df_uploaded['team'] == menu_team]['player'].dropna().unique())
-                menu_activity = st.sidebar.selectbox('Select a Statistic', PLAYER_STATS)
-                menu_player2 = None
-                menu_team2 = None
-            elif analysis_level == 'Team':
-                menu_player = None
-                menu_player2 = None
-                menu_team2 = None
-                menu_activity = st.sidebar.selectbox('Select a Statistic', TEAM_STATS)
-            else:  # Comparison
-                menu_activity = st.sidebar.selectbox('Select a Statistic', COMPARISON_STATS)
-                st.sidebar.markdown("#### Player 1")
-                menu_team = st.sidebar.selectbox('Team', teams_uploaded, key='team1_uploaded')
-                menu_player = st.sidebar.selectbox('Player', df_uploaded[df_uploaded['team'] == menu_team]['player'].dropna().unique(), key='player1_uploaded')
-                st.sidebar.markdown("#### Player 2")
-                menu_team2 = st.sidebar.selectbox('Team', teams_uploaded, key='team2_uploaded')
-                menu_player2 = st.sidebar.selectbox('Player', df_uploaded[df_uploaded['team'] == menu_team2]['player'].dropna().unique(), key='player2_uploaded')
+        if df_uploaded is not None:
+            # Vérification des colonnes
+            is_valid, missing_info = check_required_columns(df_uploaded, required_columns)
 
-            df_events = df_uploaded
-            menu_game = "Uploaded Data" 
+            if not is_valid:
+                st.error(f"Data Error: {missing_info}")
+                st.stop()  # Stop further execution if columns are missing
+            else:
+                # Extraction des équipes et joueurs
+                teams_uploaded = df_uploaded['team'].dropna().unique()
+                players_uploaded = df_uploaded[df_uploaded['team'] == teams_uploaded[0]]['player'].dropna().unique()
 
-else: 
-    # List of games and JSON files as dictionary
-    games_dict = {
-        'Barcelona - Huesca 4:1 (Round 27)': '3773369',
-        'Barcelona - Real Madrid 1:3 (Round 7)': '3773585'
-    }
+                # Choose analysis level
+                analysis_level = st.sidebar.radio('Analysis Level', ['Player', 'Team', 'Comparison'], horizontal=True)
 
-    games_list = list(games_dict.keys())
-    games_id_list = list(games_dict.values())
+                # Team selection
+                menu_team = st.sidebar.selectbox('Select a Team', teams_uploaded)
 
-    menu_game = st.sidebar.selectbox('Or use our samples data', games_list, index=0)
+                # Player selection (only for Player level)
+                if analysis_level == 'Player':
+                    menu_player = st.sidebar.selectbox('Select a Player', df_uploaded[df_uploaded['team'] == menu_team]['player'].dropna().unique())
+                    menu_activity = st.sidebar.selectbox('Select a Statistic', PLAYER_STATS)
+                    menu_player2 = None
+                    menu_team2 = None
+                elif analysis_level == 'Team':
+                    menu_player = None
+                    menu_player2 = None
+                    menu_team2 = None
+                    menu_activity = st.sidebar.selectbox('Select a Statistic', TEAM_STATS)
+                else:  # Comparison
+                    menu_activity = st.sidebar.selectbox('Select a Statistic', COMPARISON_STATS)
+                    st.sidebar.markdown("#### Player 1")
+                    menu_team = st.sidebar.selectbox('Team', teams_uploaded, key='team1_uploaded')
+                    menu_player = st.sidebar.selectbox('Player', df_uploaded[df_uploaded['team'] == menu_team]['player'].dropna().unique(), key='player1_uploaded')
+                    st.sidebar.markdown("#### Player 2")
+                    menu_team2 = st.sidebar.selectbox('Team', teams_uploaded, key='team2_uploaded')
+                    menu_player2 = st.sidebar.selectbox('Player', df_uploaded[df_uploaded['team'] == menu_team2]['player'].dropna().unique(), key='player2_uploaded')
 
-    # Get Statsbomb events data based on selected game
-    df_events = sb.events(match_id=games_dict.get(menu_game))
-    df_events.to_json("df_test.json")
+                df_events = df_uploaded
+                menu_game = "Uploaded Data"
 
-    # Get teams and players names
-    team_1 = df_events['team'].unique()[0]
-    team_2 = df_events['team'].unique()[1]
-    mask_1 = df_events.loc[df_events['team'] == team_1]
-    mask_2 = df_events.loc[df_events['team'] == team_2]
-    player_names_1 = mask_1['player'].dropna().unique()
-    player_names_2 = mask_2['player'].dropna().unique()
+    else:
+        # List of games and JSON files as dictionary
+        games_dict = {
+            'Barcelona - Huesca 4:1 (Round 27)': '3773369',
+            'Barcelona - Real Madrid 1:3 (Round 7)': '3773585'
+        }
 
-    # Drop-down menu 2
-    st.sidebar.markdown('## Analysis Selection')
+        games_list = list(games_dict.keys())
+        games_id_list = list(games_dict.values())
 
-    # Choose analysis level
-    analysis_level = st.sidebar.radio('Analysis Level', ['Player', 'Team', 'Comparison'], horizontal=True)
+        menu_game = st.sidebar.selectbox('Or use our samples data', games_list, index=0)
 
-    # Player selection (only for Player level)
-    if analysis_level == 'Player':
-        menu_team = st.sidebar.selectbox('Select a Team', (team_1, team_2))
-        if menu_team == team_1:
-            menu_player = st.sidebar.selectbox('Select a Player', player_names_1)
-        else:
-            menu_player = st.sidebar.selectbox('Select a Player', player_names_2)
-        menu_activity = st.sidebar.selectbox('Select a Statistic', PLAYER_STATS)
-        menu_player2 = None
-        menu_team2 = None
-    elif analysis_level == 'Team':
-        menu_team = st.sidebar.selectbox('Select a Team', (team_1, team_2))
-        menu_player = None
-        menu_player2 = None
-        menu_team2 = None
-        menu_activity = st.sidebar.selectbox('Select a Statistic', TEAM_STATS)
-    else:  # Comparison
-        menu_activity = st.sidebar.selectbox('Select a Statistic', COMPARISON_STATS)
-        st.sidebar.markdown("#### Player 1")
-        menu_team = st.sidebar.selectbox('Team', (team_1, team_2), key='team1')
-        if menu_team == team_1:
-            menu_player = st.sidebar.selectbox('Player', player_names_1, key='player1')
-        else:
-            menu_player = st.sidebar.selectbox('Player', player_names_2, key='player1')
-        st.sidebar.markdown("#### Player 2")
-        menu_team2 = st.sidebar.selectbox('Team', (team_1, team_2), key='team2')
-        if menu_team2 == team_1:
-            menu_player2 = st.sidebar.selectbox('Player', player_names_1, key='player2')
-        else:
-            menu_player2 = st.sidebar.selectbox('Player', player_names_2, key='player2')
+        # Get Statsbomb events data based on selected game
+        df_events = sb.events(match_id=games_dict.get(menu_game))
+        df_events.to_json("df_test.json")
+
+        # Get teams and players names
+        team_1 = df_events['team'].unique()[0]
+        team_2 = df_events['team'].unique()[1]
+        mask_1 = df_events.loc[df_events['team'] == team_1]
+        mask_2 = df_events.loc[df_events['team'] == team_2]
+        player_names_1 = mask_1['player'].dropna().unique()
+        player_names_2 = mask_2['player'].dropna().unique()
+
+        # Drop-down menu 2
+        st.sidebar.markdown('## Analysis Selection')
+
+        # Choose analysis level
+        analysis_level = st.sidebar.radio('Analysis Level', ['Player', 'Team', 'Comparison'], horizontal=True)
+
+        # Player selection (only for Player level)
+        if analysis_level == 'Player':
+            menu_team = st.sidebar.selectbox('Select a Team', (team_1, team_2))
+            if menu_team == team_1:
+                menu_player = st.sidebar.selectbox('Select a Player', player_names_1)
+            else:
+                menu_player = st.sidebar.selectbox('Select a Player', player_names_2)
+            menu_activity = st.sidebar.selectbox('Select a Statistic', PLAYER_STATS)
+            menu_player2 = None
+            menu_team2 = None
+        elif analysis_level == 'Team':
+            menu_team = st.sidebar.selectbox('Select a Team', (team_1, team_2))
+            menu_player = None
+            menu_player2 = None
+            menu_team2 = None
+            menu_activity = st.sidebar.selectbox('Select a Statistic', TEAM_STATS)
+        else:  # Comparison
+            menu_activity = st.sidebar.selectbox('Select a Statistic', COMPARISON_STATS)
+            st.sidebar.markdown("#### Player 1")
+            menu_team = st.sidebar.selectbox('Team', (team_1, team_2), key='team1')
+            if menu_team == team_1:
+                menu_player = st.sidebar.selectbox('Player', player_names_1, key='player1')
+            else:
+                menu_player = st.sidebar.selectbox('Player', player_names_2, key='player1')
+            st.sidebar.markdown("#### Player 2")
+            menu_team2 = st.sidebar.selectbox('Team', (team_1, team_2), key='team2')
+            if menu_team2 == team_1:
+                menu_player2 = st.sidebar.selectbox('Player', player_names_1, key='player2')
+            else:
+                menu_player2 = st.sidebar.selectbox('Player', player_names_2, key='player2')
 
 # Time filter section
 st.sidebar.markdown('## Time Filter')
@@ -224,7 +288,7 @@ st.write("""* Events data labelled by [StatsBomb](https://github.com/statsbomb/s
 st.divider()
 
 # Display title based on statistic type
-if menu_activity in ["Pass Network", "xG Timeline", "Heatmap", "Player Radar", "Match Summary"]:
+if menu_activity in ["Pass Network", "xG Timeline", "Heatmap", "Player Radar", "Match Summary", "Season Summary", "Performance Trend"]:
     st.write('###', menu_activity)
 else:
     st.write('###', menu_activity, 'Map')
@@ -294,6 +358,13 @@ elif menu_activity == "Player Radar":
     else:
         fig, ax = player_comparison_radar(df=df_events, player1=menu_player, player2=menu_player2,
                                           team1=menu_team, team2=menu_team2)
+# Multi-match statistics
+elif menu_activity == "Season Summary":
+    fig, ax = player_season_summary(df=df_events, player=menu_player, team=menu_team,
+                                    num_matches=num_matches if 'num_matches' in dir() else 1)
+elif menu_activity == "Performance Trend":
+    fig, ax = performance_trend(df=df_events, player=menu_player, team=menu_team,
+                                stat_type=trend_stat if 'trend_stat' in dir() and trend_stat else 'xG')
 
 st.pyplot(fig)
 
@@ -503,6 +574,65 @@ elif menu_activity == "Player Radar":
         - Exact values for each metric
         - **Green** highlights the winner of each category
         - Additional metrics: Pass Accuracy %, Dribble Success %, xG
+        """)
+
+elif menu_activity == "Season Summary":
+    with st.expander("How to read this chart?", expanded=False):
+        st.markdown("""
+        **What is this?**
+        A radar chart showing aggregated player stats across multiple matches, normalized **per 90 minutes** for fair comparison.
+
+        **Why per 90 minutes?**
+        - Allows comparison between players with different playing time
+        - Industry standard metric used by professional analysts
+        - Example: 2 goals in 180 minutes = 1.0 goals per 90
+
+        **Metrics on the radar:**
+        - **Passes/Forward Passes**: Passing volume and progression
+        - **Shots/Goals/xG**: Attacking output and efficiency
+        - **Dribbles Won**: 1v1 ability
+        - **Carries/Prog. Carries**: Ball progression with feet
+        - **Ball Recoveries/Def. Actions**: Defensive contribution
+
+        **Season Totals vs Per 90:**
+        - **Season Totals**: Raw numbers across all matches
+        - **Per 90**: Normalized rate to compare fairly
+        - **xG Difference**: Goals - xG (positive = clinical finisher)
+
+        **Key insights:**
+        - *Large radar area* = Well-rounded player
+        - *Spikes* = Player's strengths
+        - *Dips* = Areas for improvement
+        """)
+
+elif menu_activity == "Performance Trend":
+    with st.expander("How to read this chart?", expanded=False):
+        st.markdown("""
+        **What is this?**
+        A line chart showing how a player's chosen metric evolved across multiple matches.
+
+        **Visual elements:**
+        - **Red line** = Value per match
+        - **Blue dashed line** = Average across all matches
+        - **Shaded area** = Visual emphasis on performance
+
+        **Available metrics:**
+        - **xG**: Expected Goals per match - chance quality created
+        - **Goals**: Actual goals scored
+        - **Passes**: Completed passes
+        - **Dribbles**: Successful 1v1s
+
+        **Key insights:**
+        - *Rising trend* = Player improving over time
+        - *Falling trend* = Potential fatigue or form drop
+        - *Spikes* = Standout performances
+        - *Dips* = Off days or tough opponents
+        - *Consistent around average* = Reliable performer
+
+        **Use cases:**
+        - Track form over a season
+        - Identify when a player peaked
+        - Spot patterns (home/away, certain opponents)
         """)
 
 # Time filter tip
