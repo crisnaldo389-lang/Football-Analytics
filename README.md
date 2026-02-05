@@ -1,7 +1,147 @@
-# Football-Analytics
+# Football Analytics
 
-This is an interactive data application to visualize events data about football players.
+Interactive data visualization application for football match analysis. Built with Streamlit and powered by StatsBomb open data.
 
-Events data have been labelled by StastBomb according to the following [specification](https://github.com/statsbomb/statsbombpy/blob/master/doc/Open%20Data%20Events%20v4.0.0.pdf).
+## Features
 
-To run the app locally, clone the repository, use `pip install -r requirements.txt` and then `streamlit run main.py`.
+### Single Match Analysis
+- **Player Statistics**: Passes, Shots, Heatmap, Carries, Dribbles
+- **Team Statistics**: Match Summary, Pass Network, xG Timeline
+- **Comparison**: Player Radar (compare two players side-by-side)
+
+### Multi-Match Analysis
+- **Season Summary**: Aggregated player stats normalized per 90 minutes
+- **Performance Trend**: Track player metrics evolution across matches
+
+### Export Options
+- PNG image export
+- PDF report generation with statistics
+
+## Quick Start
+
+### Prerequisites
+- Python 3.10+ (tested with Python 3.13)
+- pip
+
+### Installation
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/your-username/Football-Analytics.git
+   cd Football-Analytics
+   ```
+
+2. **Create a virtual environment** (recommended)
+   ```bash
+   python -m venv .venv
+
+   # Windows
+   .venv\Scripts\activate
+
+   # macOS/Linux
+   source .venv/bin/activate
+   ```
+
+3. **Install dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **Run the application**
+   ```bash
+   streamlit run main.py
+   ```
+
+5. **Open your browser** at `http://localhost:8501`
+
+## Usage
+
+### Using Sample Data
+The app includes two pre-loaded La Liga matches:
+- Barcelona vs Huesca (4-1)
+- Barcelona vs Real Madrid (1-3)
+
+Select a match from the sidebar and explore the visualizations.
+
+### Using Your Own Data
+Upload a JSON file with StatsBomb event data format. Required columns:
+- `player`, `team`, `location`, `minute`
+- `pass_end_location`, `type`, `pass_outcome`, `pass_recipient`
+- `shot_outcome`, `shot_end_location`, `shot_statsbomb_xg`
+- `carry_end_location`, `dribble_outcome`
+
+### Multi-Match Mode
+1. Select "Multi-Match" in the Data Mode selector
+2. Upload 2+ JSON files (one per match)
+3. Select a player and view aggregated statistics
+
+## Project Structure
+
+```
+Football-Analytics/
+├── main.py              # Streamlit application entry point
+├── helpers.py           # Visualization and utility functions
+├── requirements.txt     # Python dependencies
+├── docs/                # StatsBomb data specifications
+├── exploration/         # Jupyter notebooks for data exploration
+├── assets/              # Static assets (images, etc.)
+└── .devcontainer/       # VS Code Dev Container configuration
+```
+
+## Visualizations
+
+| Visualization | Description |
+|--------------|-------------|
+| **Passes Map** | All player passes with success/fail indicators |
+| **Shots Map** | Shot locations with xG values |
+| **Heatmap** | Player position frequency on the pitch |
+| **Carries Map** | Ball progression with feet |
+| **Dribbles Map** | 1v1 attempts with success rate |
+| **Pass Network** | Team passing connections and average positions |
+| **xG Timeline** | Match progression with expected goals |
+| **Match Summary** | Side-by-side team comparison |
+| **Player Radar** | Multi-metric player comparison |
+| **Season Summary** | Aggregated stats per 90 minutes |
+| **Performance Trend** | Metric evolution across matches |
+
+## Data Source
+
+Event data provided by [StatsBomb Open Data](https://github.com/statsbomb/open-data).
+
+Documentation available in the `docs/` folder:
+- [Events v4.0.0](docs/Open%20Data%20Events%20v4.0.0.pdf)
+- [Matches v3.0.0](docs/Open%20Data%20Matches%20v3.0.0.pdf)
+- [Competitions v2.0.0](docs/Open%20Data%20Competitions%20v2.0.0.pdf)
+- [Lineups v2.0.0](docs/Open%20Data%20Lineups%20v2.0.0.pdf)
+
+## Development
+
+### Running with Dev Container
+This project includes a Dev Container configuration for VS Code. Open the project in VS Code and use "Reopen in Container" for a pre-configured development environment.
+
+### Jupyter Notebooks
+Explore the data interactively using the notebooks in `exploration/`:
+- `exploration.ipynb` - General data exploration
+- `heatmap.ipynb` - Heatmap visualizations
+- `shots.ipynb` - Shot analysis
+
+## Tech Stack
+
+- **[Streamlit](https://streamlit.io/)** - Web application framework
+- **[mplsoccer](https://mplsoccer.readthedocs.io/)** - Football pitch visualizations
+- **[statsbombpy](https://github.com/statsbomb/statsbombpy)** - StatsBomb data API
+- **[matplotlib](https://matplotlib.org/)** / **[seaborn](https://seaborn.pydata.org/)** - Plotting
+- **[pandas](https://pandas.pydata.org/)** - Data manipulation
+- **[fpdf2](https://py-pdf.github.io/fpdf2/)** - PDF generation
+
+## License
+
+This project uses StatsBomb open data which is free to use under the [StatsBomb Public Data License](https://github.com/statsbomb/open-data/blob/master/LICENSE.pdf).
+
+## Author
+
+[@alex.mrl38](https://github.com/alex-mrl38)
+
+---
+
+*Built with data from StatsBomb*
