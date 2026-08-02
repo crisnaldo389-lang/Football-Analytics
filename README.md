@@ -146,9 +146,19 @@ Explore the data interactively using the notebooks in `exploration/`:
 
 This project uses StatsBomb open data which is free to use under the [StatsBomb Public Data License](https://github.com/statsbomb/open-data/blob/master/LICENSE.pdf).
 
+### Attribution requirements
+
+Clause 1.4 of the agreement: *"The User is required to accredit any publication of analysis formed from StatsBomb Data with the StatsBomb brand logo."*
+
+The official logo (`assets/SB - Icon Lockup - Colour positive.png`, from the StatsBomb media pack) is drawn on **every visualisation** and in the **PDF report footer**. It is placed on the matplotlib figure itself, not just in the interface, so exported PNGs carry it too. If the logo file is missing, the figures fall back to a `Data: StatsBomb` text credit — never to nothing.
+
+Keep this in place: removing it puts the project in breach of the licence.
+
+Clause 1.2.2 also forbids commercially exploiting the data or any analysis derived from it.
+
 ## Author
 
-[@alex.mrl38](https://github.com/alex-mrl38)
+[@alex.mrl38](https://github.com/AlexandreMorel)
 
 ---
 

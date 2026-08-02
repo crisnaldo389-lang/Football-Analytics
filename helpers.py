@@ -10,11 +10,14 @@ from statsbombpy import sb
 # en parallèle, et il fait doublon avec le nôtre, qui garde le DataFrame déjà parsé.
 requests_cache.uninstall_cache()
 import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
 import pandas as pd
 import numpy as np
 from scipy.ndimage import gaussian_filter
 from io import BytesIO
 from datetime import datetime
+from functools import lru_cache
+from pathlib import Path
 
 # PDF generation imports
 try:
@@ -22,6 +25,51 @@ try:
     PDF_AVAILABLE = True
 except ImportError:
     PDF_AVAILABLE = False
+
+# La clause 1.4 du StatsBomb Public Data User Agreement impose de créditer toute
+# publication d'analyse tirée de ces données avec le logo de marque StatsBomb. Le crédit
+# est apposé sur la figure elle-même, et non seulement dans l'interface, pour que
+# l'export PNG le conserve.
+STATSBOMB_LOGO_PATH = Path(__file__).parent / 'assets' / 'SB - Icon Lockup - Colour positive.png'
+STATSBOMB_CREDIT = 'Data: StatsBomb'
+
+
+@lru_cache(maxsize=1)
+def load_statsbomb_logo():
+    """ Charge le logo officiel une seule fois, ou None s'il est absent du dépôt. """
+    try:
+        return mpimg.imread(STATSBOMB_LOGO_PATH)
+    except Exception:
+        return None
+
+
+def add_statsbomb_credit(fig, x=0.02, y=0.012, width=0.13, color='#000000',
+                         fontsize=9, alpha=1.0):
+    """
+    Appose le crédit StatsBomb en bas à gauche d'une figure.
+
+    Utilise le logo de marque exigé par la licence, et retombe sur un crédit texte si
+    le fichier manque, pour qu'un clone incomplet reste malgré tout crédité.
+
+    Args:
+        fig: figure matplotlib
+        x, y, width: position et largeur du logo, en coordonnées normalisées de figure
+        color, fontsize, alpha: mise en forme du crédit texte de repli
+    """
+    logo = load_statsbomb_logo()
+    if logo is None:
+        fig.text(x, y, STATSBOMB_CREDIT, ha='left', va='bottom',
+                 fontsize=fontsize, color=color, alpha=alpha)
+        return
+
+    # Hauteur déduite du ratio du logo, corrigée par le format de la figure
+    fig_width, fig_height = fig.get_size_inches()
+    logo_ratio = logo.shape[1] / logo.shape[0]
+    height = width * (fig_width / fig_height) / logo_ratio
+
+    ax_logo = fig.add_axes((x, y, width, height), zorder=10)
+    ax_logo.imshow(logo)
+    ax_logo.axis('off')
 
 def passes_map(player, df, team, match=None):
     df_pass = df.loc[(df['player'] == player) & (df['type'] == 'Pass')].dropna(subset=['location', 'pass_end_location'])
@@ -88,6 +136,7 @@ def passes_map(player, df, team, match=None):
 
     # endnote and title
     axs['endnote'].text(1, 0.5, '@alex.mrl38', va='center', ha='right', fontsize=20, color='#000000')
+    add_statsbomb_credit(fig)
     TITLE_TEXT = f'Passes of {player} ({team})'
     axs['title'].text(0.5, 0.7, TITLE_TEXT, color='#000000',
                     va='center', ha='center', fontsize=25)
@@ -131,6 +180,7 @@ def heatmap(player, df, team, match=None):
     # endnote /title
     axs['endnote'].text(1, 0.5, '@alex.mrl38', color='#ffffff',
                         va='center', ha='right', fontsize=15)
+    add_statsbomb_credit(fig, color='#ffffff')
     TITLE_TEXT = f'Heatmap of {player} ({team})'
     axs['title'].text(0.5, 0.7, TITLE_TEXT, color='#ffffff',
                     va='center', ha='center', fontsize=25)
@@ -195,6 +245,7 @@ def shots_map(player, df, team, match=None):
 
     # endnote and title
     axs['endnote'].text(1, 0.5, '@alex.mrl38', va='center', ha='right', fontsize=20, color='#000000')
+    add_statsbomb_credit(fig)
     TITLE_TEXT = f'Shots of {player} ({team})'
     axs['title'].text(0.5, 0.7, TITLE_TEXT, color='#000000',
                     va='center', ha='center', fontsize=25)
@@ -268,6 +319,7 @@ def carries_map(player, df, team, match=None):
 
     # Endnote and title
     axs['endnote'].text(1, 0.5, '@alex.mrl38', va='center', ha='right', fontsize=20, color='#000000')
+    add_statsbomb_credit(fig)
     TITLE_TEXT = f'Carries of {player} ({team})'
     axs['title'].text(0.5, 0.7, TITLE_TEXT, color='#000000',
                     va='center', ha='center', fontsize=25)
@@ -333,6 +385,7 @@ def dribbles_map(player, df, team, match=None):
 
     # Endnote and title
     axs['endnote'].text(1, 0.5, '@alex.mrl38', va='center', ha='right', fontsize=20, color='#000000')
+    add_statsbomb_credit(fig)
     TITLE_TEXT = f'Dribbles of {player} ({team})'
     axs['title'].text(0.5, 0.7, TITLE_TEXT, color='#000000',
                     va='center', ha='center', fontsize=25)
@@ -430,6 +483,7 @@ def pass_network(df, team, match=None):
 
     # Endnote and title
     axs['endnote'].text(1, 0.5, '@alex.mrl38', va='center', ha='right', fontsize=20, color='#FFFFFF')
+    add_statsbomb_credit(fig, color='#FFFFFF')
     TITLE_TEXT = f'Pass Network - {team}'
     axs['title'].text(0.5, 0.7, TITLE_TEXT, color='#FFFFFF',
                     va='center', ha='center', fontsize=25)
@@ -539,6 +593,9 @@ def xg_timeline(df, team, match=None):
              fontsize=9, color='#ffffff', alpha=0.7)
 
     plt.tight_layout()
+
+    # Après tight_layout, qui ne doit pas prendre l'axe du logo dans son calcul
+    add_statsbomb_credit(fig, x=0.01, width=0.11, color='#ffffff', alpha=0.7)
 
     # Metrics
     total_xg_1 = shots_team1['shot_statsbomb_xg'].sum() if not shots_team1.empty else 0
@@ -695,6 +752,9 @@ def match_summary(df, match=None):
 
     plt.tight_layout()
 
+    # Après tight_layout, qui ne doit pas prendre l'axe du logo dans son calcul
+    add_statsbomb_credit(fig, color='#ffffff', alpha=0.5)
+
     return fig, ax
 
 # ==================== COMPARISON STATISTICS ====================
@@ -821,6 +881,7 @@ def player_comparison_radar(df, player1, player2, team1, team2, match=None):
     # Add endnote
     fig.text(0.5, 0.02, '@alex.mrl38', ha='center', va='bottom',
              fontsize=9, color='#ffffff', alpha=0.5)
+    add_statsbomb_credit(fig, color='#ffffff', alpha=0.5)
 
     # Display detailed stats comparison
     st.markdown("##### Detailed Comparison")
@@ -1173,6 +1234,7 @@ def player_season_summary(df, player, team, num_matches=None):
     # Endnote
     fig.text(0.5, 0.02, '@alex.mrl38', ha='center', va='bottom',
              fontsize=9, color='#ffffff', alpha=0.5)
+    add_statsbomb_credit(fig, color='#ffffff', alpha=0.5)
 
     # Display metrics in Streamlit
     st.markdown("##### Season Totals")
@@ -1274,6 +1336,9 @@ def performance_trend(df, player, team, stat_type='xG'):
     fig.text(0.95, 0.02, '@alex.mrl38', ha='right', va='bottom', fontsize=9, color='#ffffff', alpha=0.5)
 
     plt.tight_layout()
+
+    # Après tight_layout, qui ne doit pas prendre l'axe du logo dans son calcul
+    add_statsbomb_credit(fig, x=0.04, width=0.11, color='#ffffff', alpha=0.5)
 
     # Display metrics
     col1, col2, col3, col4 = st.columns(4)
@@ -1392,6 +1457,13 @@ def generate_pdf_report(fig, df, match, analysis_type, player=None, team=None,
 
     # Footer
     pdf.ln(10)
+
+    # Logo StatsBomb exigé par la clause 1.4 de la licence, centré au-dessus du crédit texte
+    if STATSBOMB_LOGO_PATH.exists():
+        logo_width = 35
+        pdf.image(str(STATSBOMB_LOGO_PATH), x=(pdf.w - logo_width) / 2, w=logo_width)
+        pdf.ln(2)
+
     pdf.set_font('Helvetica', 'I', 8)
     pdf.set_text_color(150, 150, 150)
     pdf.cell(0, 5, 'Data source: StatsBomb Open Data', ln=True, align='C')
