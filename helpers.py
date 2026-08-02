@@ -170,10 +170,19 @@ def heatmap(player, df, team, match=None):
     # Filtrer les données du joueur spécifié
     df_heatmap = df.loc[df['player'] == player]
 
-    # Récupérer les coordonnées des emplacements non nuls
+    # Récupérer les emplacements non nuls
     location = df_heatmap["location"].dropna().tolist()
-    x = pd.Series([el[0] for el in location])
-    y = pd.Series([el[1] for el in location])
+
+    # Sans cette garde, une liste vide produit une Series de dtype 'object' sur laquelle
+    # le binning de mplsoccer appelle np.isnan, qui lève. Le cas se produit dès qu'un
+    # joueur n'a aucune action sur la période filtrée.
+    if not location:
+        return _empty_pitch(f"No data available for {player}",
+                            pitch_color='#22312b', line_color='#efefef')
+
+    # dtype explicite : il protège le binning si la liste venait à ne plus être garantie
+    x = pd.Series([el[0] for el in location], dtype='float64')
+    y = pd.Series([el[1] for el in location], dtype='float64')
 
     # Setup pitch
     pitch = Pitch(pitch_type='statsbomb', line_zorder=2, pitch_color='#22312b', line_color='#efefef')
