@@ -1,5 +1,14 @@
+import warnings
+from concurrent.futures import ThreadPoolExecutor
 import streamlit as st
+import requests_cache
 from mplsoccer import Pitch, Radar
+from statsbombpy import sb
+
+# statsbombpy installe à l'import un cache HTTP SQLite global sur requests. Ce cache
+# corrompt la mémoire du process (segfault) dès que plusieurs matchs sont téléchargés
+# en parallèle, et il fait doublon avec le nôtre, qui garde le DataFrame déjà parsé.
+requests_cache.uninstall_cache()
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
@@ -866,6 +875,157 @@ def try_read_json(uploaded_file):
         # Gestion de toute autre exception non prévue
         st.error(f"An unexpected error occurred: {e}")
         st.stop()  # Stop further execution if columns are missing
+
+# ==================== STATSBOMB OPEN DATA ====================
+
+# Le catalogue (compétitions, calendriers) bouge rarement : cache d'une journée.
+# Les évènements d'un match donné ne changent jamais : cache sans expiration.
+CATALOG_TTL = 60 * 60 * 24
+
+# Téléchargements simultanés en mode Multi-Match : au-delà, l'API open data
+# ne va pas plus vite et on multiplie les risques de throttling.
+MAX_PARALLEL_DOWNLOADS = 6
+
+
+def _sb_call(func, **kwargs):
+    """ Appelle statsbombpy en masquant le NoAuthWarning (accès open data sans identifiants). """
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        return func(**kwargs)
+
+
+def competition_label(row):
+    """ Nom lisible d'une compétition, ex: 'England - FA Women's Super League (women)'. """
+    label = f"{row['country_name']} - {row['competition_name']}"
+    tags = []
+    if row.get('competition_gender') == 'female':
+        tags.append('women')
+    if row.get('competition_youth'):
+        tags.append('youth')
+    return f"{label} ({', '.join(tags)})" if tags else label
+
+
+def match_label(row):
+    """ Nom lisible d'un match, ex: 'Barcelona 4-1 Huesca (2021-03-15)'. """
+    if pd.notna(row['home_score']) and pd.notna(row['away_score']):
+        score = f"{int(row['home_score'])}-{int(row['away_score'])}"
+    else:
+        score = 'vs'
+    return f"{row['home_team']} {score} {row['away_team']} ({str(row['match_date'])[:10]})"
+
+
+@st.cache_data(ttl=CATALOG_TTL, show_spinner=False)
+def load_competitions():
+    """
+    Récupère tous les couples compétition/saison disponibles en open data.
+
+    Returns:
+        DataFrame avec une colonne 'competition_label' prête à afficher,
+        ou un DataFrame vide si l'API est injoignable.
+    """
+    try:
+        df = _sb_call(sb.competitions)
+    except Exception as e:
+        st.error(f"Could not load StatsBomb competitions: {e}")
+        return pd.DataFrame()
+
+    df['competition_label'] = df.apply(competition_label, axis=1)
+    return df
+
+
+@st.cache_data(ttl=CATALOG_TTL, show_spinner=False)
+def load_matches(competition_id, season_id):
+    """
+    Récupère le calendrier d'une saison, du match le plus récent au plus ancien.
+
+    Returns:
+        DataFrame avec une colonne 'match_label', ou un DataFrame vide en cas d'échec.
+    """
+    try:
+        df = _sb_call(sb.matches, competition_id=competition_id, season_id=season_id)
+    except Exception as e:
+        st.error(f"Could not load matches for this season: {e}")
+        return pd.DataFrame()
+
+    df = df.sort_values('match_date', ascending=False).reset_index(drop=True)
+    df['match_label'] = df.apply(match_label, axis=1)
+    return df
+
+
+def _fetch_events(match_id):
+    """
+    Télécharge les évènements d'un match sans toucher à Streamlit, ce qui rend
+    l'appel utilisable depuis un thread.
+
+    Returns:
+        Tuple (match_id, DataFrame), ou (match_id, None) en cas d'échec.
+    """
+    try:
+        return match_id, _sb_call(sb.events, match_id=int(match_id))
+    except Exception:
+        return match_id, None
+
+
+@st.cache_data(show_spinner=False)
+def load_events(match_id):
+    """ Récupère les évènements d'un match, ou un DataFrame vide en cas d'échec. """
+    _, df = _fetch_events(match_id)
+    if df is None:
+        st.error(f"Could not load events for match {match_id}")
+        return pd.DataFrame()
+    return df
+
+
+def load_events_parallel(match_ids):
+    """
+    Charge plusieurs matchs de front (le téléchargement pèse ~80% du temps de chargement).
+
+    Les workers ne touchent à aucune API Streamlit : ils ne font que du réseau, le cache
+    et les messages d'erreur restent sur le thread principal.
+
+    Un match pèse ~12 Mo en mémoire : le cache est réduit à la sélection courante pour
+    que la session ne grossisse pas au fil de la navigation. Conséquence assumée,
+    re-cocher un match désélectionné le retélécharge.
+
+    Returns:
+        Liste de (match_id, DataFrame) dans l'ordre de match_ids ; les matchs en échec
+        sont signalés à l'utilisateur et exclus.
+    """
+    if not match_ids:
+        return []
+
+    if 'events_cache' not in st.session_state:
+        st.session_state['events_cache'] = {}
+    cache = st.session_state['events_cache']
+
+    missing = [match_id for match_id in match_ids if match_id not in cache]
+    if missing:
+        with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_DOWNLOADS, len(missing))) as pool:
+            for match_id, df in pool.map(_fetch_events, missing):
+                if df is not None:  # un échec n'est pas mis en cache, il sera réessayé
+                    cache[match_id] = df
+
+    for stale in set(cache) - set(match_ids):
+        del cache[stale]
+
+    failed = [match_id for match_id in match_ids if match_id not in cache]
+    if failed:
+        st.warning(f"{len(failed)} of {len(match_ids)} matches could not be loaded and were skipped.")
+
+    return [(match_id, cache[match_id]) for match_id in match_ids if match_id in cache]
+
+
+def ensure_columns(df, cols):
+    """
+    Ajoute les colonnes absentes en NaN.
+
+    StatsBomb ne renvoie une colonne que si l'évènement correspondant existe :
+    un match sans dribble arrive sans 'dribble_outcome', que les visualisations attendent.
+    """
+    for col in cols:
+        if col not in df.columns:
+            df[col] = np.nan
+    return df
 
 # ==================== MULTI-MATCH AGGREGATION ====================
 

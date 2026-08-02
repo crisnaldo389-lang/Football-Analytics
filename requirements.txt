@@ -16,6 +16,9 @@ mplsoccer>=1.2.0
 # Data Source
 # =========================
 statsbombpy>=1.13.0
+# Dependance transitive de statsbombpy, importee explicitement par helpers.py
+# pour desactiver son cache HTTP SQLite (non thread-safe)
+requests-cache>=1.2.0
 
 # =========================
 # PDF Export (optional)
