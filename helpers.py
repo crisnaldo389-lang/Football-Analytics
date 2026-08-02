@@ -72,8 +72,27 @@ def add_statsbomb_credit(fig, x=0.02, y=0.012, width=0.13, color='#000000',
     ax_logo.imshow(logo)
     ax_logo.axis('off')
 
+
+def _empty_pitch(message, pitch_color='#FFFFFF', line_color='#000000'):
+    """ Terrain vide renvoyé quand aucune action ne correspond au filtre. """
+    st.warning(message)
+    pitch = Pitch(pitch_type='statsbomb', pitch_color=pitch_color, line_color=line_color)
+    fig, axs = pitch.grid(endnote_height=0.03, endnote_space=0, figheight=12,
+                          title_height=0.06, title_space=0, grid_height=0.86, axis=False)
+    if pitch_color != '#FFFFFF':
+        fig.set_facecolor(pitch_color)
+    return fig, axs
+
+
 def passes_map(player, df, team, match=None):
     df_pass = df.loc[(df['player'] == player) & (df['type'] == 'Pass')].dropna(subset=['location', 'pass_end_location'])
+
+    # Un joueur peut n'avoir aucune passe sur la période analysée : remplaçant entré en
+    # fin de match, ou filtre temporel resserré. Sans cette garde, le calcul du taux de
+    # réussite divise par zéro.
+    if df_pass.empty:
+        return _empty_pitch(f"No pass data available for {player}")
+
     mask_complete = df_pass.pass_outcome.isnull()
 
     # Créer des séries de données pour chaque type de passe
@@ -151,10 +170,19 @@ def heatmap(player, df, team, match=None):
     # Filtrer les données du joueur spécifié
     df_heatmap = df.loc[df['player'] == player]
 
-    # Récupérer les coordonnées des emplacements non nuls
+    # Récupérer les emplacements non nuls
     location = df_heatmap["location"].dropna().tolist()
-    x = pd.Series([el[0] for el in location])
-    y = pd.Series([el[1] for el in location])
+
+    # Sans cette garde, une liste vide produit une Series de dtype 'object' sur laquelle
+    # le binning de mplsoccer appelle np.isnan, qui lève. Le cas se produit dès qu'un
+    # joueur n'a aucune action sur la période filtrée.
+    if not location:
+        return _empty_pitch(f"No data available for {player}",
+                            pitch_color='#22312b', line_color='#efefef')
+
+    # dtype explicite : il protège le binning si la liste venait à ne plus être garantie
+    x = pd.Series([el[0] for el in location], dtype='float64')
+    y = pd.Series([el[1] for el in location], dtype='float64')
 
     # Setup pitch
     pitch = Pitch(pitch_type='statsbomb', line_zorder=2, pitch_color='#22312b', line_color='#efefef')
@@ -426,17 +454,6 @@ def _action_x(df):
     """ Abscisses des évènements localisés, en unités terrain StatsBomb (0-120). """
     located = df.dropna(subset=['location'])
     return pd.Series([loc[0] for loc in located['location']], dtype='float64')
-
-
-def _empty_pitch(message, pitch_color='#FFFFFF', line_color='#000000'):
-    """ Terrain vide renvoyé quand aucune action ne correspond au filtre. """
-    st.warning(message)
-    pitch = Pitch(pitch_type='statsbomb', pitch_color=pitch_color, line_color=line_color)
-    fig, axs = pitch.grid(endnote_height=0.03, endnote_space=0, figheight=12,
-                          title_height=0.06, title_space=0, grid_height=0.86, axis=False)
-    if pitch_color != '#FFFFFF':
-        fig.set_facecolor(pitch_color)
-    return fig, axs
 
 
 def compute_ppda(df, team):

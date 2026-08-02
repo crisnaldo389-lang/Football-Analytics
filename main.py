@@ -342,73 +342,44 @@ elif menu_player is not None:
 elif menu_activity not in ["xG Timeline", "Match Summary"]:
     st.write('###### Team:', menu_team) 
 
-# Get plot function based on selected activity
+# Get plot function based on selected activity.
+# Le mode Upload JSON n'a pas de nom de match à afficher : les visualisations acceptent
+# match=None, qu'elles rendent comme un sous-titre vide.
+match_title = None if menu_game == "Uploaded Data" else menu_game
+
+# Player statistics
 if menu_activity == 'Passes':
-    if menu_game != "Uploaded Data": 
-        fig, ax = passes_map(player=menu_player, df=df_events, team=menu_team, match=menu_game)
-    else:
-        fig, ax = passes_map(player=menu_player, df=df_events, team=menu_team)
+    fig, ax = passes_map(player=menu_player, df=df_events, team=menu_team, match=match_title)
 elif menu_activity == "Heatmap":
-    if menu_game != "Uploaded Data": 
-        fig, ax = heatmap(player=menu_player, df=df_events, team=menu_team, match=menu_game)
-    else:
-        fig, ax = heatmap(player=menu_player, df=df_events, team=menu_team)
+    fig, ax = heatmap(player=menu_player, df=df_events, team=menu_team, match=match_title)
 elif menu_activity == "Shots":
-    if menu_game != "Uploaded Data":
-        fig, ax = shots_map(player=menu_player, df=df_events, team=menu_team, match=menu_game)
-    else:
-        fig, ax = shots_map(player=menu_player, df=df_events, team=menu_team)
+    fig, ax = shots_map(player=menu_player, df=df_events, team=menu_team, match=match_title)
 elif menu_activity == "Carries":
-    if menu_game != "Uploaded Data":
-        fig, ax = carries_map(player=menu_player, df=df_events, team=menu_team, match=menu_game)
-    else:
-        fig, ax = carries_map(player=menu_player, df=df_events, team=menu_team)
+    fig, ax = carries_map(player=menu_player, df=df_events, team=menu_team, match=match_title)
 elif menu_activity == "Dribbles":
-    if menu_game != "Uploaded Data":
-        fig, ax = dribbles_map(player=menu_player, df=df_events, team=menu_team, match=menu_game)
-    else:
-        fig, ax = dribbles_map(player=menu_player, df=df_events, team=menu_team)
+    fig, ax = dribbles_map(player=menu_player, df=df_events, team=menu_team, match=match_title)
 elif menu_activity == "Defensive Actions":
-    if menu_game != "Uploaded Data":
-        fig, ax = defensive_actions_map(player=menu_player, df=df_events, team=menu_team, match=menu_game)
-    else:
-        fig, ax = defensive_actions_map(player=menu_player, df=df_events, team=menu_team)
+    fig, ax = defensive_actions_map(player=menu_player, df=df_events, team=menu_team, match=match_title)
 # Team statistics
 elif menu_activity == "Match Summary":
-    if menu_game != "Uploaded Data":
-        fig, ax = match_summary(df=df_events, match=menu_game)
-    else:
-        fig, ax = match_summary(df=df_events)
+    fig, ax = match_summary(df=df_events, match=match_title)
 elif menu_activity == "Pass Network":
-    if menu_game != "Uploaded Data":
-        fig, ax = pass_network(df=df_events, team=menu_team, match=menu_game)
-    else:
-        fig, ax = pass_network(df=df_events, team=menu_team)
+    fig, ax = pass_network(df=df_events, team=menu_team, match=match_title)
 elif menu_activity == "xG Timeline":
-    if menu_game != "Uploaded Data":
-        fig, ax = xg_timeline(df=df_events, team=menu_team, match=menu_game)
-    else:
-        fig, ax = xg_timeline(df=df_events, team=menu_team)
+    fig, ax = xg_timeline(df=df_events, team=menu_team, match=match_title)
 elif menu_activity == "Defensive Shape":
-    if menu_game != "Uploaded Data":
-        fig, ax = defensive_shape(df=df_events, team=menu_team, match=menu_game)
-    else:
-        fig, ax = defensive_shape(df=df_events, team=menu_team)
+    fig, ax = defensive_shape(df=df_events, team=menu_team, match=match_title)
 # Comparison statistics
 elif menu_activity == "Player Radar":
-    if menu_game != "Uploaded Data":
-        fig, ax = player_comparison_radar(df=df_events, player1=menu_player, player2=menu_player2,
-                                          team1=menu_team, team2=menu_team2, match=menu_game)
-    else:
-        fig, ax = player_comparison_radar(df=df_events, player1=menu_player, player2=menu_player2,
-                                          team1=menu_team, team2=menu_team2)
+    fig, ax = player_comparison_radar(df=df_events, player1=menu_player, player2=menu_player2,
+                                      team1=menu_team, team2=menu_team2, match=match_title)
 # Multi-match statistics
 elif menu_activity == "Season Summary":
     fig, ax = player_season_summary(df=df_events, player=menu_player, team=menu_team,
-                                    num_matches=num_matches if 'num_matches' in dir() else 1)
+                                    num_matches=num_matches)
 elif menu_activity == "Performance Trend":
     fig, ax = performance_trend(df=df_events, player=menu_player, team=menu_team,
-                                stat_type=trend_stat if 'trend_stat' in dir() and trend_stat else 'xG')
+                                stat_type=trend_stat or 'xG')
 
 st.pyplot(fig)
 
@@ -787,8 +758,8 @@ with col_export2:
             analysis_type=menu_activity,
             player=menu_player,
             team=menu_team,
-            player2=menu_player2 if 'menu_player2' in dir() else None,
-            team2=menu_team2 if 'menu_team2' in dir() else None,
+            player2=menu_player2,
+            team2=menu_team2,
             time_range=time_range
         )
         if pdf_buffer:
