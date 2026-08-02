@@ -11,6 +11,7 @@ from statsbombpy import sb
 requests_cache.uninstall_cache()
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
+import matplotlib.patheffects as path_effects
 import pandas as pd
 import numpy as np
 from scipy.ndimage import gaussian_filter
@@ -390,6 +391,205 @@ def dribbles_map(player, df, team, match=None):
     axs['title'].text(0.5, 0.7, TITLE_TEXT, color='#000000',
                     va='center', ha='center', fontsize=25)
     axs['title'].text(0.5, 0.25, match, color='#000000',
+                    va='center', ha='center', fontsize=18)
+
+    return fig, axs
+
+# ==================== DEFENSIVE STATISTICS ====================
+
+# Couleur et marqueur par type d'action défensive. Les marqueurs diffèrent pour que la
+# carte reste lisible en niveaux de gris (impression, export PDF noir et blanc).
+DEFENSIVE_ACTIONS = {
+    'Pressure':      ('#F4D03F', 'o'),
+    'Ball Recovery': ('#3CD74A', 's'),
+    'Duel':          ('#F31515', '^'),
+    'Interception':  ('#3498DB', 'D'),
+    'Block':         ('#9B59B6', 'P'),
+    'Clearance':     ('#E67E22', 'X'),
+}
+
+# Un duel gagné se lit sur duel_outcome, sauf pour les duels aériens perdus que StatsBomb
+# encode dans duel_type sans renseigner d'outcome.
+DUEL_WON_OUTCOMES = ['Won', 'Success', 'Success In Play', 'Success Out']
+
+# PPDA : passes concédées par action défensive. Le calcul classique ne retient que les
+# tacles, interceptions et fautes (le Pressure n'existe pas dans le modèle d'origine) et
+# se limite aux 60% de terrain les plus avancés, soit x >= 48 sur un terrain de 120.
+PPDA_ACTION_TYPES = ['Duel', 'Interception', 'Foul Committed']
+PPDA_ZONE_START = 48
+
+PITCH_LENGTH = 120
+FINAL_THIRD_START = 80
+
+
+def _action_x(df):
+    """ Abscisses des évènements localisés, en unités terrain StatsBomb (0-120). """
+    located = df.dropna(subset=['location'])
+    return pd.Series([loc[0] for loc in located['location']], dtype='float64')
+
+
+def _empty_pitch(message, pitch_color='#FFFFFF', line_color='#000000'):
+    """ Terrain vide renvoyé quand aucune action ne correspond au filtre. """
+    st.warning(message)
+    pitch = Pitch(pitch_type='statsbomb', pitch_color=pitch_color, line_color=line_color)
+    fig, axs = pitch.grid(endnote_height=0.03, endnote_space=0, figheight=12,
+                          title_height=0.06, title_space=0, grid_height=0.86, axis=False)
+    if pitch_color != '#FFFFFF':
+        fig.set_facecolor(pitch_color)
+    return fig, axs
+
+
+def compute_ppda(df, team):
+    """
+    PPDA d'une équipe : passes adverses concédées par action défensive dans la zone de
+    pressing. Renvoie None si l'adversaire est absent des données ou si l'équipe n'a
+    réalisé aucune action défensive dans la zone.
+
+    StatsBomb oriente les coordonnées de chaque équipe vers le but adverse : la même zone
+    physique s'écrit x >= 48 pour l'équipe qui presse et x <= 72 pour celle qui construit.
+    """
+    opponents = [t for t in df['team'].dropna().unique() if t != team]
+    if not opponents:
+        return None
+
+    opp_passes = df.loc[df['team'].isin(opponents) & (df['type'] == 'Pass')]
+    passes_in_zone = (_action_x(opp_passes) <= PITCH_LENGTH - PPDA_ZONE_START).sum()
+
+    actions = df.loc[(df['team'] == team) & (df['type'].isin(PPDA_ACTION_TYPES))]
+    actions_in_zone = (_action_x(actions) >= PPDA_ZONE_START).sum()
+
+    if actions_in_zone == 0:
+        return None
+
+    return float(passes_in_zone) / float(actions_in_zone)
+
+
+def defensive_actions_map(player, df, team, match=None):
+    """Visualize the defensive actions of a specific player."""
+    # Filter the player's defensive actions
+    df_def = df.loc[(df['player'] == player) &
+                    (df['type'].isin(DEFENSIVE_ACTIONS))].dropna(subset=['location'])
+
+    if df_def.empty:
+        return _empty_pitch(f"No defensive action available for {player}")
+
+    # Duels: 'Aerial Lost' is a loss that StatsBomb leaves without an outcome
+    duels = df_def[df_def['type'] == 'Duel']
+    duels_won = duels['duel_outcome'].isin(DUEL_WON_OUTCOMES).sum()
+    duel_rate = round(duels_won / len(duels) * 100) if len(duels) > 0 else 0
+
+    x_all = _action_x(df_def)
+    avg_height = round(x_all.mean() / PITCH_LENGTH * 100)
+    final_third = int((x_all >= FINAL_THIRD_START).sum())
+
+    # Display metrics
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Defensive Actions", len(df_def),
+                help="Pressures, recoveries, duels, interceptions, blocks and clearances")
+    col2.metric("Duels Won", f"{duels_won}/{len(duels)} ({duel_rate}%)",
+                help="Tackles and aerial duels won. >50% is solid for an outfield player")
+    col3.metric("Avg Height", f"{avg_height}%",
+                help="Average position of the actions along the pitch. 0% = own goal, 100% = opponent goal")
+    col4.metric("In Final Third", final_third,
+                help="Actions in the opponent's third - a marker of high pressing")
+
+    # Setup the pitch
+    pitch = Pitch(pitch_type='statsbomb', pitch_color='#FFFFFF', line_color='#000000')
+    fig, axs = pitch.grid(endnote_height=0.03, endnote_space=0, figheight=12,
+                      title_height=0.06, title_space=0, grid_height=0.86, axis=False)
+
+    # One scatter per action type, ordered by frequency so rare actions stay on top
+    for action_type in sorted(df_def['type'].unique(),
+                              key=lambda t: -(df_def['type'] == t).sum()):
+        color, marker = DEFENSIVE_ACTIONS[action_type]
+        data = df_def[df_def['type'] == action_type]
+        x = _action_x(data)
+        y = pd.Series([loc[1] for loc in data['location']], dtype='float64')
+        pitch.scatter(x, y, s=180, color=color, marker=marker, edgecolors='#000000',
+                      linewidth=1.2, alpha=0.85, ax=axs['pitch'],
+                      label=f'{action_type} ({len(data)})', zorder=2)
+
+    # Average height of the actions, a proxy for how high the player defends
+    axs['pitch'].axvline(x=x_all.mean(), color='#000000', linestyle='--',
+                         linewidth=2, alpha=0.6, zorder=1)
+
+    # Setup the legend
+    axs['pitch'].legend(facecolor='#D4DADC', handlelength=2, edgecolor='None',
+                        fontsize=14, loc='upper left')
+
+    # Endnote and title
+    axs['endnote'].text(1, 0.5, '@alex.mrl38', va='center', ha='right', fontsize=20, color='#000000')
+    add_statsbomb_credit(fig)
+    TITLE_TEXT = f'Defensive Actions of {player} ({team})'
+    axs['title'].text(0.5, 0.7, TITLE_TEXT, color='#000000',
+                    va='center', ha='center', fontsize=25)
+    axs['title'].text(0.5, 0.25, match, color='#000000',
+                    va='center', ha='center', fontsize=18)
+
+    return fig, axs
+
+
+def defensive_shape(df, team, match=None):
+    """Visualize where a team defends, as a zone grid with its pressing intensity."""
+    df_def = df.loc[(df['team'] == team) &
+                    (df['type'].isin(DEFENSIVE_ACTIONS))].dropna(subset=['location'])
+
+    if df_def.empty:
+        return _empty_pitch(f"No defensive action available for {team}",
+                            pitch_color='#22312b', line_color='#efefef')
+
+    x = _action_x(df_def)
+    y = pd.Series([loc[1] for loc in df_def['location']], dtype='float64')
+
+    avg_height = round(x.mean() / PITCH_LENGTH * 100)
+    opponent_half = round((x >= PITCH_LENGTH / 2).sum() / len(x) * 100)
+    ppda = compute_ppda(df, team)
+
+    # Display metrics
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Defensive Actions", len(df_def),
+                help="All defensive events recorded for the team")
+    col2.metric("PPDA", round(ppda, 1) if ppda is not None else "N/A",
+                help="Opponent passes allowed per defensive action in the pressing zone. "
+                     "Lower = more aggressive press. Below 10 is intense")
+    col3.metric("Avg Height", f"{avg_height}%",
+                help="Average position of the defensive actions. Above 50% = the team defends high")
+    col4.metric("In Opponent Half", f"{opponent_half}%",
+                help="Share of defensive actions won in the opponent's half")
+
+    # Setup the pitch
+    pitch = Pitch(pitch_type='statsbomb', line_zorder=2, pitch_color='#22312b', line_color='#efefef')
+    fig, axs = pitch.grid(endnote_height=0.03, endnote_space=0, figheight=12,
+                      title_height=0.06, title_space=0, grid_height=0.86, axis=False)
+    fig.set_facecolor('#22312b')
+
+    # Zone grid rather than a smoothed heatmap: the raw count per zone is the readable
+    # unit here, and 6x5 matches how a defensive block is usually described
+    bin_statistic = pitch.bin_statistic(x, y, statistic='count', bins=(6, 5))
+    pitch.heatmap(bin_statistic, ax=axs['pitch'], cmap='Reds', edgecolors='#22312b', alpha=0.85)
+    # Contour blanc : le compteur doit rester lisible aussi bien sur les zones pâles que
+    # sur le rouge le plus sombre, qui absorbe un texte noir
+    pitch.label_heatmap(bin_statistic, color='#000000', fontsize=16, ax=axs['pitch'],
+                        ha='center', va='center', str_format='{:.0f}', zorder=3,
+                        path_effects=[path_effects.withStroke(linewidth=2.5, foreground='#FFFFFF')])
+
+    # Average height line, annotated so the number is readable off the chart alone.
+    # L'axe y du terrain StatsBomb est inversé : va='bottom' place le texte au-dessus
+    # de la ligne de touche basse, dans le terrain.
+    axs['pitch'].axvline(x=x.mean(), color='#efefef', linestyle='--', linewidth=2.5, zorder=3)
+    axs['pitch'].text(x.mean() + 1.5, 77, f'Avg height {avg_height}%', color='#efefef',
+                      fontsize=14, va='bottom', ha='left', zorder=3)
+
+    # Endnote and title. Le sens de jeu va dans l'endnote : sans lui, la hauteur du bloc
+    # se lit à l'envers.
+    axs['endnote'].text(0, 0.5, 'Attacking direction  >>', va='center', ha='left',
+                        fontsize=15, color='#efefef')
+    axs['endnote'].text(1, 0.5, '@alex.mrl38', va='center', ha='right', fontsize=20, color='#efefef')
+    add_statsbomb_credit(fig, color='#efefef')
+    TITLE_TEXT = f'Defensive Shape - {team}'
+    axs['title'].text(0.5, 0.7, TITLE_TEXT, color='#efefef',
+                    va='center', ha='center', fontsize=25)
+    axs['title'].text(0.5, 0.25, match, color='#efefef',
                     va='center', ha='center', fontsize=18)
 
     return fig, axs
@@ -1397,7 +1597,7 @@ def generate_pdf_report(fig, df, match, analysis_type, player=None, team=None,
     elif analysis_type == "Player Radar" and player and player2:
         pdf.set_font('Helvetica', '', 11)
         pdf.cell(0, 8, f'{player} ({team}) vs {player2} ({team2})', ln=True, align='C')
-    elif team and analysis_type in ["Pass Network"]:
+    elif team and analysis_type in ["Pass Network", "Defensive Shape"]:
         pdf.set_font('Helvetica', '', 11)
         pdf.cell(0, 8, f'Team: {team}', ln=True, align='C')
 
@@ -1430,8 +1630,13 @@ def generate_pdf_report(fig, df, match, analysis_type, player=None, team=None,
     pdf.cell(0, 10, 'Key Statistics', ln=True)
     pdf.set_font('Helvetica', '', 10)
 
-    if analysis_type in ['Passes', 'Shots', 'Carries', 'Dribbles'] and player:
+    if analysis_type in ['Passes', 'Shots', 'Carries', 'Dribbles', 'Defensive Actions'] and player:
         stats = _get_player_stats_for_pdf(df, player, team, analysis_type)
+        for key, value in stats.items():
+            pdf.cell(0, 6, f'{key}: {value}', ln=True)
+
+    elif analysis_type == "Defensive Shape" and team:
+        stats = _get_defensive_stats_for_pdf(df, team)
         for key, value in stats.items():
             pdf.cell(0, 6, f'{key}: {value}', ln=True)
 
@@ -1506,6 +1711,39 @@ def _get_player_stats_for_pdf(df, player, team, analysis_type):
         total = len(dribbles)
         stats['Total Dribbles'] = total
         stats['Successful'] = f"{successful} ({round(successful/total*100) if total > 0 else 0}%)"
+
+    elif analysis_type == 'Defensive Actions':
+        actions = player_events[player_events['type'].isin(DEFENSIVE_ACTIONS)].dropna(subset=['location'])
+        duels = actions[actions['type'] == 'Duel']
+        duels_won = int(duels['duel_outcome'].isin(DUEL_WON_OUTCOMES).sum())
+        x = _action_x(actions)
+        stats['Defensive Actions'] = len(actions)
+        stats['Duels Won'] = f"{duels_won}/{len(duels)} ({round(duels_won/len(duels)*100) if len(duels) > 0 else 0}%)"
+        if not actions.empty:
+            stats['Avg Height'] = f"{round(x.mean() / PITCH_LENGTH * 100)}%"
+            stats['In Final Third'] = int((x >= FINAL_THIRD_START).sum())
+
+    return stats
+
+
+def _get_defensive_stats_for_pdf(df, team):
+    """Get team defensive statistics for PDF export."""
+    actions = df[(df['team'] == team) & (df['type'].isin(DEFENSIVE_ACTIONS))].dropna(subset=['location'])
+    stats = {'Defensive Actions': len(actions)}
+
+    if actions.empty:
+        return stats
+
+    x = _action_x(actions)
+    ppda = compute_ppda(df, team)
+    stats['PPDA'] = round(ppda, 1) if ppda is not None else 'N/A'
+    stats['Avg Height'] = f"{round(x.mean() / PITCH_LENGTH * 100)}%"
+    stats['In Opponent Half'] = f"{round((x >= PITCH_LENGTH / 2).sum() / len(x) * 100)}%"
+
+    for action_type in DEFENSIVE_ACTIONS:
+        count = int((actions['type'] == action_type).sum())
+        if count:
+            stats[action_type] = count
 
     return stats
 

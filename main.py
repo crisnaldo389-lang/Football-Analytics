@@ -8,6 +8,7 @@ Created on Sun Jun  5 11:39:54 2022
 import streamlit as st
 from io import BytesIO
 from helpers import (passes_map, heatmap, shots_map, carries_map, dribbles_map,
+                     defensive_actions_map, defensive_shape,
                      pass_network, xg_timeline, match_summary, player_comparison_radar,
                      check_required_columns, try_read_json, generate_pdf_report, PDF_AVAILABLE,
                      aggregate_matches, player_season_summary, performance_trend,
@@ -26,9 +27,14 @@ required_columns = ['team', 'player', 'location',
                     'shot_outcome', 'shot_end_location', 'shot_statsbomb_xg',
                     'carry_end_location', 'dribble_outcome', 'pass_recipient']
 
+# Colonnes propres aux évènements défensifs. Elles restent hors de required_columns :
+# les exiger rejetterait les fichiers JSON déjà utilisés, alors que les analyses
+# défensives savent se passer d'une colonne vide.
+defensive_columns = ['duel_outcome', 'duel_type']
+
 # Define statistics by level
-PLAYER_STATS = ['Passes', 'Shots', 'Heatmap', 'Carries', 'Dribbles']
-TEAM_STATS = ['Match Summary', 'Pass Network', 'xG Timeline']
+PLAYER_STATS = ['Passes', 'Shots', 'Heatmap', 'Carries', 'Dribbles', 'Defensive Actions']
+TEAM_STATS = ['Match Summary', 'Pass Network', 'xG Timeline', 'Defensive Shape']
 COMPARISON_STATS = ['Player Radar']
 MULTI_MATCH_STATS = ['Season Summary', 'Performance Trend']
 
@@ -174,6 +180,7 @@ else:
             st.error(f"Data Error: {missing_info}")
             st.stop()  # Stop further execution if columns are missing
 
+        df_events = ensure_columns(df_events, defensive_columns)
         menu_game = "Uploaded Data"
     else:
         df_matches, match_labels = select_season_matches('single')
@@ -187,7 +194,7 @@ else:
         if df_events.empty:
             st.stop()
 
-        df_events = ensure_columns(df_events, required_columns)
+        df_events = ensure_columns(df_events, required_columns + defensive_columns)
         menu_game = match_labels[menu_match_id]
 
     # Drop-down menu 2
@@ -281,7 +288,7 @@ with st.expander("Quick Start Guide", expanded=False):
 
     **2. Choose analysis level**
     - **Player**: Individual player statistics and visualizations
-    - **Team**: Team-wide analysis (Pass Network, xG Timeline, Match Summary)
+    - **Team**: Team-wide analysis (Pass Network, xG Timeline, Match Summary, Defensive Shape)
     - **Comparison**: Compare two players head-to-head with radar charts
 
     **3. Select visualization**
@@ -293,9 +300,11 @@ with st.expander("Quick Start Guide", expanded=False):
     | Player | Heatmap | Activity zones on the pitch |
     | Player | Carries | Ball progression with feet |
     | Player | Dribbles | 1v1 success/failure locations |
+    | Player | Defensive Actions | Pressures, duels, interceptions and where they happen |
     | Team | Match Summary | Complete stats comparison dashboard |
     | Team | Pass Network | Passing connections between players |
     | Team | xG Timeline | Shot quality over time |
+    | Team | Defensive Shape | Where the team defends, with PPDA and line height |
     | Compare | Player Radar | Head-to-head statistical comparison |
 
     **4. Filter by time** (optional)
@@ -312,7 +321,8 @@ st.write("""* Events data labelled by [StatsBomb](https://github.com/statsbomb/s
 st.divider()
 
 # Display title based on statistic type
-if menu_activity in ["Pass Network", "xG Timeline", "Heatmap", "Player Radar", "Match Summary", "Season Summary", "Performance Trend"]:
+if menu_activity in ["Pass Network", "xG Timeline", "Heatmap", "Player Radar", "Match Summary",
+                     "Season Summary", "Performance Trend", "Defensive Actions", "Defensive Shape"]:
     st.write('###', menu_activity)
 else:
     st.write('###', menu_activity, 'Map')
@@ -358,6 +368,11 @@ elif menu_activity == "Dribbles":
         fig, ax = dribbles_map(player=menu_player, df=df_events, team=menu_team, match=menu_game)
     else:
         fig, ax = dribbles_map(player=menu_player, df=df_events, team=menu_team)
+elif menu_activity == "Defensive Actions":
+    if menu_game != "Uploaded Data":
+        fig, ax = defensive_actions_map(player=menu_player, df=df_events, team=menu_team, match=menu_game)
+    else:
+        fig, ax = defensive_actions_map(player=menu_player, df=df_events, team=menu_team)
 # Team statistics
 elif menu_activity == "Match Summary":
     if menu_game != "Uploaded Data":
@@ -374,6 +389,11 @@ elif menu_activity == "xG Timeline":
         fig, ax = xg_timeline(df=df_events, team=menu_team, match=menu_game)
     else:
         fig, ax = xg_timeline(df=df_events, team=menu_team)
+elif menu_activity == "Defensive Shape":
+    if menu_game != "Uploaded Data":
+        fig, ax = defensive_shape(df=df_events, team=menu_team, match=menu_game)
+    else:
+        fig, ax = defensive_shape(df=df_events, team=menu_team)
 # Comparison statistics
 elif menu_activity == "Player Radar":
     if menu_game != "Uploaded Data":
@@ -499,6 +519,34 @@ elif menu_activity == "Dribbles":
         **Tactical note:** Some coaches prefer safe play (fewer dribbles), others encourage risk-taking
         """)
 
+elif menu_activity == "Defensive Actions":
+    with st.expander("How to read this chart?", expanded=False):
+        st.markdown("""
+        **Visual elements:**
+        - **Yellow circles** = Pressures (closing down an opponent in possession)
+        - **Green squares** = Ball recoveries (picking up a loose ball)
+        - **Red triangles** = Duels (tackles and aerial challenges)
+        - **Blue diamonds** = Interceptions (reading and cutting a pass)
+        - **Purple crosses** = Blocks (body in the way of a pass or shot)
+        - **Orange crosses** = Clearances (hoofing the danger away)
+        - **Dashed line** = Average height of the actions
+
+        **Metrics explained:**
+        - **Defensive Actions**: All defensive events for the player
+        - **Duels Won**: Tackles and aerial duels won out of those contested
+        - **Avg Height**: Average position along the pitch (0% = own goal, 100% = opponent goal)
+        - **In Final Third**: Actions won in the opponent's third
+
+        **Key insights:**
+        - *Many pressures, few duels* = Player harasses opponents without committing to the challenge
+        - *High Avg Height for a defender* = Aggressive line, team defends far from its goal
+        - *Actions clustered on one flank* = Player defends a zone, or the opponent attacks that side
+        - *Clearances deep in own half* = Player under sustained pressure
+
+        **Careful:** volume is context-dependent. A dominant team defends less, so a low count
+        can mean the opponent never had the ball - not that the player did nothing.
+        """)
+
 elif menu_activity == "Match Summary":
     with st.expander("How to read this dashboard?", expanded=False):
         st.markdown("""
@@ -569,6 +617,38 @@ elif menu_activity == "xG Timeline":
 
         **Who deserved to win?**
         Compare final xG values - the team with higher xG created better chances overall
+        """)
+
+elif menu_activity == "Defensive Shape":
+    with st.expander("How to read this chart?", expanded=False):
+        st.markdown("""
+        **Visual elements:**
+        - **Coloured zones** = Where the team defends. Darker red = more defensive actions
+        - **Number in each zone** = Count of defensive actions in that zone
+        - **Dashed line** = Average height of the defensive actions
+        - **Arrow** = Attacking direction (the team defends from left to right)
+
+        **Metrics explained:**
+        - **Defensive Actions**: Pressures, recoveries, duels, interceptions, blocks and clearances
+        - **PPDA** (Passes Per Defensive Action): Opponent passes allowed for each defensive
+          action in the pressing zone (the advanced 60% of the pitch). Counts tackles,
+          interceptions and fouls - the classic definition, which excludes pressures
+        - **Avg Height**: Average position of the actions (0% = own goal, 100% = opponent goal)
+        - **In Opponent Half**: Share of actions won in the opponent's half
+
+        **Reading PPDA:**
+        - *Below 8* = Very aggressive high press (Klopp, Bielsa style)
+        - *8 to 12* = Active pressing
+        - *Above 15* = Low block, the team lets the opponent circulate and defends deep
+
+        **Key insights:**
+        - *High Avg Height + low PPDA* = The team hunts the ball in the opponent's half
+        - *Zones lit up around your own box* = You spent the match under siege
+        - *One flank much hotter* = The opponent targeted that side
+        - *Compare both teams* to see which one set the tempo of the match
+
+        **Careful:** PPDA describes the defensive style, it does not judge it. A low block
+        that concedes nothing is doing its job just as well as a high press.
         """)
 
 elif menu_activity == "Player Radar":
