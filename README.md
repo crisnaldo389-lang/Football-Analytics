@@ -4,6 +4,10 @@ Interactive data visualization application for football match analysis. Built wi
 
 ## Features
 
+### Data Selection
+- **StatsBomb catalog browser**: pick any competition → season → match from the full open data catalog (80 competition/season combinations, no download required)
+- **JSON upload**: use your own StatsBomb-format event files
+
 ### Single Match Analysis
 - **Player Statistics**: Passes, Shots, Heatmap, Carries, Dribbles
 - **Team Statistics**: Match Summary, Pass Network, xG Timeline
@@ -56,15 +60,17 @@ Interactive data visualization application for football match analysis. Built wi
 
 ## Usage
 
-### Using Sample Data
-The app includes two pre-loaded La Liga matches:
-- Barcelona vs Huesca (4-1)
-- Barcelona vs Real Madrid (1-3)
+### Browsing StatsBomb Open Data
+With `Data Source` set to **StatsBomb Open Data** (default), the sidebar offers three cascading selectors:
 
-Select a match from the sidebar and explore the visualizations.
+1. **Competition** — e.g. `Spain - La Liga`, `International - FIFA World Cup`, `England - FA Women's Super League (women)`
+2. **Season** — most recent first
+3. **Match** — displayed as `Home 4-1 Away (date)`, most recent first
+
+Data is fetched from the StatsBomb public API and cached: competition and match lists for 24 hours, match events for the whole session. Switching back to an already-viewed match is instant.
 
 ### Using Your Own Data
-Upload a JSON file with StatsBomb event data format. Required columns:
+Set `Data Source` to **Upload JSON** and upload a file with StatsBomb event data format. Required columns:
 - `player`, `team`, `location`, `minute`
 - `pass_end_location`, `type`, `pass_outcome`, `pass_recipient`
 - `shot_outcome`, `shot_end_location`, `shot_statsbomb_xg`
@@ -72,7 +78,9 @@ Upload a JSON file with StatsBomb event data format. Required columns:
 
 ### Multi-Match Mode
 1. Select "Multi-Match" in the Data Mode selector
-2. Upload 2+ JSON files (one per match)
+2. Pick the matches to aggregate:
+   - **StatsBomb Open Data**: choose a competition and season, optionally filter by team, then multi-select matches (the 5 most recent are pre-selected)
+   - **Upload JSON**: upload 2+ JSON files, one per match
 3. Select a player and view aggregated statistics
 
 ## Project Structure

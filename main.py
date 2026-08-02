@@ -5,15 +5,14 @@ Created on Sun Jun  5 11:39:54 2022
 @author: alexa
 """
 
-import time
 import streamlit as st
-from statsbombpy import sb
 from io import BytesIO
 from helpers import (passes_map, heatmap, shots_map, carries_map, dribbles_map,
                      pass_network, xg_timeline, match_summary, player_comparison_radar,
                      check_required_columns, try_read_json, generate_pdf_report, PDF_AVAILABLE,
-                     aggregate_matches, player_season_summary, performance_trend)
-import pandas as pd
+                     aggregate_matches, player_season_summary, performance_trend,
+                     load_competitions, load_matches, load_events, load_events_parallel,
+                     ensure_columns)
 
 # Set page config
 st.set_page_config(page_title='Football Data Analysis', page_icon=':soccer:', initial_sidebar_state='expanded')
@@ -33,20 +32,66 @@ TEAM_STATS = ['Match Summary', 'Pass Network', 'xG Timeline']
 COMPARISON_STATS = ['Player Radar']
 MULTI_MATCH_STATS = ['Season Summary', 'Performance Trend']
 
+# Compétition proposée par défaut au premier chargement
+DEFAULT_COMPETITION = 'Spain - La Liga'
+
+# Nombre de matchs pré-sélectionnés en mode Multi-Match (chaque match = un appel API)
+DEFAULT_MULTI_MATCH_COUNT = 5
+
+
+def select_competition_season(key_prefix):
+    """ Sélecteurs en cascade compétition -> saison. Retourne (competition_id, season_id). """
+    df_comps = load_competitions()
+    if df_comps.empty:
+        st.sidebar.error("StatsBomb open data is unreachable. Switch to Upload JSON instead.")
+        st.stop()
+
+    comp_labels = sorted(df_comps['competition_label'].unique())
+    default_index = comp_labels.index(DEFAULT_COMPETITION) if DEFAULT_COMPETITION in comp_labels else 0
+    competition = st.sidebar.selectbox('Competition', comp_labels, index=default_index,
+                                       key=f'{key_prefix}_competition')
+
+    # Saisons de la compétition choisie, de la plus récente à la plus ancienne
+    seasons = df_comps[df_comps['competition_label'] == competition].sort_values('season_name', ascending=False)
+    season = st.sidebar.selectbox('Season', seasons['season_name'].tolist(), key=f'{key_prefix}_season')
+
+    row = seasons[seasons['season_name'] == season].iloc[0]
+    return int(row['competition_id']), int(row['season_id'])
+
+
+def select_season_matches(key_prefix):
+    """ Calendrier de la saison choisie. Retourne (DataFrame des matchs, dict match_id -> label). """
+    competition_id, season_id = select_competition_season(key_prefix)
+    df_matches = load_matches(competition_id, season_id)
+
+    if df_matches.empty:
+        st.sidebar.error("No match available for this season.")
+        st.stop()
+
+    return df_matches, dict(zip(df_matches['match_id'], df_matches['match_label']))
+
+
 # Data mode selection
 data_mode = st.sidebar.radio('Data Mode', ['Single Match', 'Multi-Match'], horizontal=True,
                               help="Single Match: Analyze one game. Multi-Match: Aggregate stats across multiple games.")
 
+data_source = st.sidebar.radio('Data Source', ['StatsBomb Open Data', 'Upload JSON'], horizontal=True,
+                               help="StatsBomb: browse the full open data catalog. Upload: use your own StatsBomb-format JSON files.")
+
 # Multi-Match mode
 if data_mode == 'Multi-Match':
-    st.sidebar.markdown("#### Upload Multiple Matches")
-    uploaded_files = st.sidebar.file_uploader("Upload JSON files", type='json', accept_multiple_files=True)
+    dataframes = []
+    match_names = []
 
-    if uploaded_files and len(uploaded_files) > 0:
-        # Load all files
-        dataframes = []
-        match_names = []
-        for i, file in enumerate(uploaded_files):
+    if data_source == 'Upload JSON':
+        st.sidebar.markdown("#### Upload Multiple Matches")
+        uploaded_files = st.sidebar.file_uploader("Upload JSON files", type='json', accept_multiple_files=True)
+
+        if not uploaded_files:
+            st.sidebar.info("Upload 2+ JSON files to analyze player performance across matches")
+            st.stop()
+
+        for file in uploaded_files:
             df = try_read_json(file)
             if df is not None:
                 is_valid, missing_info = check_required_columns(df, required_columns)
@@ -55,38 +100,58 @@ if data_mode == 'Multi-Match':
                     match_names.append(file.name.replace('.json', ''))
                 else:
                     st.sidebar.warning(f"Skipped {file.name}: {missing_info}")
-
-        if len(dataframes) > 0:
-            # Aggregate data
-            df_events = aggregate_matches(dataframes, match_names)
-            num_matches = len(dataframes)
-
-            st.sidebar.success(f"{num_matches} matches loaded")
-
-            # Get unique players across all matches
-            teams = df_events['team'].dropna().unique()
-            menu_team = st.sidebar.selectbox('Select a Team', teams)
-            players = df_events[df_events['team'] == menu_team]['player'].dropna().unique()
-            menu_player = st.sidebar.selectbox('Select a Player', players)
-
-            # Multi-match specific stats
-            menu_activity = st.sidebar.selectbox('Select a Statistic', MULTI_MATCH_STATS)
-
-            if menu_activity == 'Performance Trend':
-                trend_stat = st.sidebar.selectbox('Metric to Track', ['xG', 'Goals', 'Passes', 'Dribbles'])
-            else:
-                trend_stat = None
-
-            menu_game = f"{num_matches} Matches"
-            menu_player2 = None
-            menu_team2 = None
-            is_multi_match = True
-        else:
-            st.sidebar.error("No valid files loaded")
-            st.stop()
     else:
-        st.sidebar.info("Upload 2+ JSON files to analyze player performance across matches")
+        df_matches, match_labels = select_season_matches('multi')
+
+        # Filtre par équipe : une saison complète peut compter plus de 100 matchs
+        season_teams = sorted(set(df_matches['home_team']) | set(df_matches['away_team']))
+        team_filter = st.sidebar.selectbox('Filter matches by team', ['All teams'] + season_teams)
+        if team_filter != 'All teams':
+            df_matches = df_matches[(df_matches['home_team'] == team_filter) |
+                                    (df_matches['away_team'] == team_filter)]
+
+        available_ids = df_matches['match_id'].tolist()
+        selected_ids = st.sidebar.multiselect('Matches', available_ids,
+                                              default=available_ids[:DEFAULT_MULTI_MATCH_COUNT],
+                                              format_func=lambda match_id: match_labels.get(match_id, str(match_id)))
+
+        if not selected_ids:
+            st.sidebar.info("Select at least one match")
+            st.stop()
+
+        with st.spinner(f"Loading {len(selected_ids)} matches..."):
+            for match_id, df in load_events_parallel(selected_ids):
+                dataframes.append(ensure_columns(df, required_columns))
+                match_names.append(match_labels[match_id])
+
+    if len(dataframes) == 0:
+        st.sidebar.error("No valid match loaded")
         st.stop()
+
+    # Aggregate data
+    df_events = aggregate_matches(dataframes, match_names)
+    num_matches = len(dataframes)
+
+    st.sidebar.success(f"{num_matches} matches loaded")
+
+    # Get unique players across all matches
+    teams = df_events['team'].dropna().unique()
+    menu_team = st.sidebar.selectbox('Select a Team', teams)
+    players = df_events[df_events['team'] == menu_team]['player'].dropna().unique()
+    menu_player = st.sidebar.selectbox('Select a Player', players)
+
+    # Multi-match specific stats
+    menu_activity = st.sidebar.selectbox('Select a Statistic', MULTI_MATCH_STATS)
+
+    if menu_activity == 'Performance Trend':
+        trend_stat = st.sidebar.selectbox('Metric to Track', ['xG', 'Goals', 'Passes', 'Dribbles'])
+    else:
+        trend_stat = None
+
+    menu_game = f"{num_matches} Matches"
+    menu_player2 = None
+    menu_team2 = None
+    is_multi_match = True
 
 # Single Match mode
 else:
@@ -94,112 +159,71 @@ else:
     trend_stat = None
     num_matches = 1
 
-    # File upload
-    uploaded_file = st.sidebar.file_uploader("Upload your own data", type='json')
-    if uploaded_file is not None:
-        df_uploaded = try_read_json(uploaded_file)
+    if data_source == 'Upload JSON':
+        uploaded_file = st.sidebar.file_uploader("Upload your own data", type='json')
 
-        if df_uploaded is not None:
-            # Vérification des colonnes
-            is_valid, missing_info = check_required_columns(df_uploaded, required_columns)
+        if uploaded_file is None:
+            st.sidebar.info("Upload a StatsBomb-format JSON file, or switch to StatsBomb Open Data")
+            st.stop()
 
-            if not is_valid:
-                st.error(f"Data Error: {missing_info}")
-                st.stop()  # Stop further execution if columns are missing
-            else:
-                # Extraction des équipes et joueurs
-                teams_uploaded = df_uploaded['team'].dropna().unique()
-                players_uploaded = df_uploaded[df_uploaded['team'] == teams_uploaded[0]]['player'].dropna().unique()
+        df_events = try_read_json(uploaded_file)
 
-                # Choose analysis level
-                analysis_level = st.sidebar.radio('Analysis Level', ['Player', 'Team', 'Comparison'], horizontal=True)
+        # Vérification des colonnes
+        is_valid, missing_info = check_required_columns(df_events, required_columns)
+        if not is_valid:
+            st.error(f"Data Error: {missing_info}")
+            st.stop()  # Stop further execution if columns are missing
 
-                # Team selection
-                menu_team = st.sidebar.selectbox('Select a Team', teams_uploaded)
-
-                # Player selection (only for Player level)
-                if analysis_level == 'Player':
-                    menu_player = st.sidebar.selectbox('Select a Player', df_uploaded[df_uploaded['team'] == menu_team]['player'].dropna().unique())
-                    menu_activity = st.sidebar.selectbox('Select a Statistic', PLAYER_STATS)
-                    menu_player2 = None
-                    menu_team2 = None
-                elif analysis_level == 'Team':
-                    menu_player = None
-                    menu_player2 = None
-                    menu_team2 = None
-                    menu_activity = st.sidebar.selectbox('Select a Statistic', TEAM_STATS)
-                else:  # Comparison
-                    menu_activity = st.sidebar.selectbox('Select a Statistic', COMPARISON_STATS)
-                    st.sidebar.markdown("#### Player 1")
-                    menu_team = st.sidebar.selectbox('Team', teams_uploaded, key='team1_uploaded')
-                    menu_player = st.sidebar.selectbox('Player', df_uploaded[df_uploaded['team'] == menu_team]['player'].dropna().unique(), key='player1_uploaded')
-                    st.sidebar.markdown("#### Player 2")
-                    menu_team2 = st.sidebar.selectbox('Team', teams_uploaded, key='team2_uploaded')
-                    menu_player2 = st.sidebar.selectbox('Player', df_uploaded[df_uploaded['team'] == menu_team2]['player'].dropna().unique(), key='player2_uploaded')
-
-                df_events = df_uploaded
-                menu_game = "Uploaded Data"
-
+        menu_game = "Uploaded Data"
     else:
-        # List of games and JSON files as dictionary
-        games_dict = {
-            'Barcelona - Huesca 4:1 (Round 27)': '3773369',
-            'Barcelona - Real Madrid 1:3 (Round 7)': '3773585'
-        }
+        df_matches, match_labels = select_season_matches('single')
 
-        games_list = list(games_dict.keys())
-        games_id_list = list(games_dict.values())
+        menu_match_id = st.sidebar.selectbox('Match', df_matches['match_id'].tolist(),
+                                             format_func=lambda match_id: match_labels.get(match_id, str(match_id)))
 
-        menu_game = st.sidebar.selectbox('Or use our samples data', games_list, index=0)
+        with st.spinner("Loading match events..."):
+            df_events = load_events(menu_match_id)
 
-        # Get Statsbomb events data based on selected game
-        df_events = sb.events(match_id=games_dict.get(menu_game))
-        df_events.to_json("df_test.json")
+        if df_events.empty:
+            st.stop()
 
-        # Get teams and players names
-        team_1 = df_events['team'].unique()[0]
-        team_2 = df_events['team'].unique()[1]
-        mask_1 = df_events.loc[df_events['team'] == team_1]
-        mask_2 = df_events.loc[df_events['team'] == team_2]
-        player_names_1 = mask_1['player'].dropna().unique()
-        player_names_2 = mask_2['player'].dropna().unique()
+        df_events = ensure_columns(df_events, required_columns)
+        menu_game = match_labels[menu_match_id]
 
-        # Drop-down menu 2
-        st.sidebar.markdown('## Analysis Selection')
+    # Drop-down menu 2
+    st.sidebar.markdown('## Analysis Selection')
 
-        # Choose analysis level
-        analysis_level = st.sidebar.radio('Analysis Level', ['Player', 'Team', 'Comparison'], horizontal=True)
+    teams_list = df_events['team'].dropna().unique()
 
-        # Player selection (only for Player level)
-        if analysis_level == 'Player':
-            menu_team = st.sidebar.selectbox('Select a Team', (team_1, team_2))
-            if menu_team == team_1:
-                menu_player = st.sidebar.selectbox('Select a Player', player_names_1)
-            else:
-                menu_player = st.sidebar.selectbox('Select a Player', player_names_2)
-            menu_activity = st.sidebar.selectbox('Select a Statistic', PLAYER_STATS)
-            menu_player2 = None
-            menu_team2 = None
-        elif analysis_level == 'Team':
-            menu_team = st.sidebar.selectbox('Select a Team', (team_1, team_2))
-            menu_player = None
-            menu_player2 = None
-            menu_team2 = None
-            menu_activity = st.sidebar.selectbox('Select a Statistic', TEAM_STATS)
-        else:  # Comparison
-            menu_activity = st.sidebar.selectbox('Select a Statistic', COMPARISON_STATS)
-            st.sidebar.markdown("#### Player 1")
-            menu_team = st.sidebar.selectbox('Team', (team_1, team_2), key='team1')
-            if menu_team == team_1:
-                menu_player = st.sidebar.selectbox('Player', player_names_1, key='player1')
-            else:
-                menu_player = st.sidebar.selectbox('Player', player_names_2, key='player1')
-            st.sidebar.markdown("#### Player 2")
-            menu_team2 = st.sidebar.selectbox('Team', (team_1, team_2), key='team2')
-            if menu_team2 == team_1:
-                menu_player2 = st.sidebar.selectbox('Player', player_names_1, key='player2')
-            else:
-                menu_player2 = st.sidebar.selectbox('Player', player_names_2, key='player2')
+    # Choose analysis level
+    analysis_level = st.sidebar.radio('Analysis Level', ['Player', 'Team', 'Comparison'], horizontal=True)
+
+    # Player selection (only for Player level)
+    if analysis_level == 'Player':
+        menu_team = st.sidebar.selectbox('Select a Team', teams_list)
+        menu_player = st.sidebar.selectbox('Select a Player',
+                                           df_events[df_events['team'] == menu_team]['player'].dropna().unique())
+        menu_activity = st.sidebar.selectbox('Select a Statistic', PLAYER_STATS)
+        menu_player2 = None
+        menu_team2 = None
+    elif analysis_level == 'Team':
+        menu_team = st.sidebar.selectbox('Select a Team', teams_list)
+        menu_player = None
+        menu_player2 = None
+        menu_team2 = None
+        menu_activity = st.sidebar.selectbox('Select a Statistic', TEAM_STATS)
+    else:  # Comparison
+        menu_activity = st.sidebar.selectbox('Select a Statistic', COMPARISON_STATS)
+        st.sidebar.markdown("#### Player 1")
+        menu_team = st.sidebar.selectbox('Team', teams_list, key='team1')
+        menu_player = st.sidebar.selectbox('Player',
+                                           df_events[df_events['team'] == menu_team]['player'].dropna().unique(),
+                                           key='player1')
+        st.sidebar.markdown("#### Player 2")
+        menu_team2 = st.sidebar.selectbox('Team', teams_list, key='team2')
+        menu_player2 = st.sidebar.selectbox('Player',
+                                            df_events[df_events['team'] == menu_team2]['player'].dropna().unique(),
+                                            key='player2')
 
 # Time filter section
 st.sidebar.markdown('## Time Filter')
@@ -252,8 +276,8 @@ with st.expander("Quick Start Guide", expanded=False):
     ### How to use this tool
 
     **1. Select your data** (sidebar)
-    - Upload your own StatsBomb JSON file, or
-    - Use one of the sample matches (Barcelona games)
+    - **StatsBomb Open Data**: pick a competition, a season and a match from the full open data catalog, or
+    - **Upload JSON**: use your own StatsBomb-format file(s)
 
     **2. Choose analysis level**
     - **Player**: Individual player statistics and visualizations
