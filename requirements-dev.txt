@@ -1,0 +1,4 @@
+# Dépendances de développement. L'application n'en a pas besoin pour tourner.
+-r requirements.txt
+
+pytest>=8.0.0

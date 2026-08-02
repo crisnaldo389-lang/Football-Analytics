@@ -128,6 +128,24 @@ Documentation available in the `docs/` folder:
 
 ## Development
 
+### Tests
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+The suite runs offline: the StatsBomb loaders are replaced by a local fixture
+(`tests/fixtures/sample_match.json.gz`, a real open data match trimmed to the columns the
+app reads), so no API call is made and results are deterministic.
+
+| File | What it covers |
+|------|----------------|
+| `tests/test_stats.py` | Pure computations: PPDA, PDF statistics, data loading helpers |
+| `tests/test_visualisations.py` | Every visualisation renders, including on degraded data |
+| `tests/test_app.py` | The app is actually run and driven through `AppTest`: menus, dispatch, titles, time filter |
+
+Every push and pull request runs the suite through GitHub Actions.
+
 ### Running with Dev Container
 This project includes a Dev Container configuration for VS Code. Open the project in VS Code and use "Reopen in Container" for a pre-configured development environment.
 

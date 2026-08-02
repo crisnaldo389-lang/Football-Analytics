@@ -72,8 +72,27 @@ def add_statsbomb_credit(fig, x=0.02, y=0.012, width=0.13, color='#000000',
     ax_logo.imshow(logo)
     ax_logo.axis('off')
 
+
+def _empty_pitch(message, pitch_color='#FFFFFF', line_color='#000000'):
+    """ Terrain vide renvoyé quand aucune action ne correspond au filtre. """
+    st.warning(message)
+    pitch = Pitch(pitch_type='statsbomb', pitch_color=pitch_color, line_color=line_color)
+    fig, axs = pitch.grid(endnote_height=0.03, endnote_space=0, figheight=12,
+                          title_height=0.06, title_space=0, grid_height=0.86, axis=False)
+    if pitch_color != '#FFFFFF':
+        fig.set_facecolor(pitch_color)
+    return fig, axs
+
+
 def passes_map(player, df, team, match=None):
     df_pass = df.loc[(df['player'] == player) & (df['type'] == 'Pass')].dropna(subset=['location', 'pass_end_location'])
+
+    # Un joueur peut n'avoir aucune passe sur la période analysée : remplaçant entré en
+    # fin de match, ou filtre temporel resserré. Sans cette garde, le calcul du taux de
+    # réussite divise par zéro.
+    if df_pass.empty:
+        return _empty_pitch(f"No pass data available for {player}")
+
     mask_complete = df_pass.pass_outcome.isnull()
 
     # Créer des séries de données pour chaque type de passe
@@ -426,17 +445,6 @@ def _action_x(df):
     """ Abscisses des évènements localisés, en unités terrain StatsBomb (0-120). """
     located = df.dropna(subset=['location'])
     return pd.Series([loc[0] for loc in located['location']], dtype='float64')
-
-
-def _empty_pitch(message, pitch_color='#FFFFFF', line_color='#000000'):
-    """ Terrain vide renvoyé quand aucune action ne correspond au filtre. """
-    st.warning(message)
-    pitch = Pitch(pitch_type='statsbomb', pitch_color=pitch_color, line_color=line_color)
-    fig, axs = pitch.grid(endnote_height=0.03, endnote_space=0, figheight=12,
-                          title_height=0.06, title_space=0, grid_height=0.86, axis=False)
-    if pitch_color != '#FFFFFF':
-        fig.set_facecolor(pitch_color)
-    return fig, axs
 
 
 def compute_ppda(df, team):
