@@ -9,8 +9,8 @@ Interactive data visualization application for football match analysis. Built wi
 - **JSON upload**: use your own StatsBomb-format event files
 
 ### Single Match Analysis
-- **Player Statistics**: Passes, Shots, Heatmap, Carries, Dribbles
-- **Team Statistics**: Match Summary, Pass Network, xG Timeline
+- **Player Statistics**: Passes, Shots, Heatmap, Carries, Dribbles, Defensive Actions
+- **Team Statistics**: Match Summary, Pass Network, xG Timeline, Defensive Shape
 - **Comparison**: Player Radar (compare two players side-by-side)
 
 ### Multi-Match Analysis
@@ -76,6 +76,8 @@ Set `Data Source` to **Upload JSON** and upload a file with StatsBomb event data
 - `shot_outcome`, `shot_end_location`, `shot_statsbomb_xg`
 - `carry_end_location`, `dribble_outcome`
 
+Optional columns, used by the defensive analyses when present: `duel_outcome`, `duel_type`. A file without them still loads — the duel counters simply read zero.
+
 ### Multi-Match Mode
 1. Select "Multi-Match" in the Data Mode selector
 2. Pick the matches to aggregate:
@@ -105,8 +107,10 @@ Football-Analytics/
 | **Heatmap** | Player position frequency on the pitch |
 | **Carries Map** | Ball progression with feet |
 | **Dribbles Map** | 1v1 attempts with success rate |
+| **Defensive Actions** | Pressures, recoveries, duels, interceptions, blocks and clearances of a player |
 | **Pass Network** | Team passing connections and average positions |
 | **xG Timeline** | Match progression with expected goals |
+| **Defensive Shape** | Zone grid of where a team defends, with PPDA and average line height |
 | **Match Summary** | Side-by-side team comparison |
 | **Player Radar** | Multi-metric player comparison |
 | **Season Summary** | Aggregated stats per 90 minutes |
