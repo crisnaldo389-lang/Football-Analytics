@@ -4,9 +4,67 @@ import pandas as pd
 import pytest
 
 from helpers import (compute_ppda, ensure_columns, check_required_columns, aggregate_matches,
-                     _get_player_stats_for_pdf, _get_defensive_stats_for_pdf,
-                     _get_match_stats_for_pdf, PPDA_ZONE_START, PITCH_LENGTH)
+                     get_shots, _get_player_stats_for_pdf, _get_defensive_stats_for_pdf,
+                     _get_match_stats_for_pdf, PPDA_ZONE_START, PITCH_LENGTH,
+                     SHOOTOUT_PERIOD)
 from conftest import HOME_TEAM, AWAY_TEAM
+
+
+# ==================== TIRS ET SÉANCE DE TIRS AU BUT ====================
+
+def shootout_match():
+    """
+    Match nul 1-1 décidé aux tirs au but, à la manière d'un export StatsBomb.
+
+    Le penalty de la 30e est obtenu dans le jeu et compte au score ; les deux tirs de la
+    période 5 décident de la qualification mais pas du score.
+    """
+    return pd.DataFrame({
+        'team': [HOME_TEAM] * 3 + [AWAY_TEAM],
+        'player': ['Marqueur'] * 3 + ['Adversaire'],
+        'type': ['Shot'] * 4,
+        'period': [1, SHOOTOUT_PERIOD, SHOOTOUT_PERIOD, 2],
+        'minute': [30, 120, 120, 70],
+        'shot_type': ['Penalty', 'Penalty', 'Penalty', 'Open Play'],
+        'shot_outcome': ['Goal', 'Goal', 'Saved', 'Goal'],
+        'shot_statsbomb_xg': [0.78, 0.78, 0.78, 0.1],
+        'pass_outcome': [np.nan] * 4,  # colonne lue par les stats d'équipe
+    })
+
+
+def test_get_shots_excludes_the_shootout_but_keeps_penalties_in_play():
+    shots = get_shots(shootout_match())
+
+    assert len(shots) == 2
+    assert (shots['period'] != SHOOTOUT_PERIOD).all()
+    # Le penalty obtenu dans le jeu reste compté
+    assert (shots['shot_type'] == 'Penalty').sum() == 1
+
+
+def test_get_shots_keeps_the_shootout_on_demand():
+    assert len(get_shots(shootout_match(), include_shootout=True)) == 4
+
+
+def test_get_shots_without_a_period_column_keeps_every_shot():
+    """ Un fichier importé peut ne pas porter la colonne : ne rien perdre silencieusement. """
+    df = shootout_match().drop(columns=['period'])
+    assert len(get_shots(df)) == 4
+
+
+def test_match_stats_ignore_shootout_goals_and_xg():
+    stats = _get_match_stats_for_pdf(shootout_match(), HOME_TEAM, AWAY_TEAM)
+
+    assert stats[f'{HOME_TEAM} Goals'] == 1
+    assert stats[f'{HOME_TEAM} xG'] == 0.78
+    assert stats[f'{AWAY_TEAM} Goals'] == 1
+
+
+def test_player_stats_ignore_shootout_goals():
+    stats = _get_player_stats_for_pdf(shootout_match(), 'Marqueur', HOME_TEAM, 'Shots')
+
+    assert stats['Shots'] == 1
+    assert stats['Goals'] == 1
+    assert stats['xG'] == 0.78
 
 
 # ==================== PPDA ====================

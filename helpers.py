@@ -84,6 +84,35 @@ def _empty_pitch(message, pitch_color='#FFFFFF', line_color='#000000'):
     return fig, axs
 
 
+# StatsBomb numérote les périodes 1 et 2 (temps réglementaire), 3 et 4 (prolongation),
+# puis 5 pour la séance de tirs au but. Un tir au but y est enregistré comme n'importe
+# quel autre tir : type 'Shot', shot_type 'Penalty', avec un xG. Seule la période le
+# distingue d'un penalty obtenu dans le jeu, qui lui compte bien au score et au xG.
+SHOOTOUT_PERIOD = 5
+
+
+def get_shots(df, include_shootout=False):
+    """
+    Évènements de tir, séance de tirs au but exclue.
+
+    La séance décide du qualifié mais pas du score du match : la compter gonflerait
+    les buts et le xG de plusieurs unités sur un match à élimination directe.
+
+    Args:
+        df: DataFrame d'évènements
+        include_shootout: True pour conserver les tirs de la séance
+    """
+    shots = df[df['type'] == 'Shot']
+    if include_shootout or 'period' not in shots.columns:
+        return shots
+
+    # Une période illisible devient NaN, donc différente de 5, et le tir est conservé :
+    # sur un fichier importé sans cette colonne, mieux vaut un tir de trop qu'un but réel
+    # effacé du décompte.
+    period = pd.to_numeric(shots['period'], errors='coerce')
+    return shots[period != SHOOTOUT_PERIOD]
+
+
 def passes_map(player, df, team, match=None):
     df_pass = df.loc[(df['player'] == player) & (df['type'] == 'Pass')].dropna(subset=['location', 'pass_end_location'])
 
@@ -220,7 +249,7 @@ def heatmap(player, df, team, match=None):
 
 def shots_map(player, df, team, match=None):
     # Filtrer les tirs du joueur spécifié
-    shots = df.loc[(df['player'] == player) & (df['type'] == 'Shot')]
+    shots = get_shots(df.loc[df['player'] == player])
     
     # Définir les différents types de tirs
     shot_outcomes = {
@@ -717,7 +746,7 @@ def xg_timeline(df, team, match=None):
     team_2 = teams[1] if len(teams) > 1 else None
 
     # Filter shots for both teams
-    shots = df[df['type'] == 'Shot'].copy()
+    shots = get_shots(df).copy()
 
     if shots.empty:
         st.warning("No shot data available for this match")
@@ -849,7 +878,7 @@ def match_summary(df, match=None):
         pass_accuracy = round((completed_passes / total_passes * 100), 1) if total_passes > 0 else 0
 
         # Shots
-        shots = team_events[team_events['type'] == 'Shot']
+        shots = get_shots(team_events)
         total_shots = len(shots)
         shots_on_target = len(shots[shots['shot_outcome'].isin(['Goal', 'Saved', 'Saved To Post'])])
         goals = len(shots[shots['shot_outcome'] == 'Goal'])
@@ -1000,7 +1029,7 @@ def player_comparison_radar(df, player1, player2, team1, team2, match=None):
             forward_passes = 0
 
         # Shots
-        shots = player_events[player_events['type'] == 'Shot']
+        shots = get_shots(player_events)
         total_shots = len(shots)
         goals = len(shots[shots['shot_outcome'] == 'Goal'])
         xg = shots['shot_statsbomb_xg'].sum() if not shots.empty else 0
@@ -1365,7 +1394,7 @@ def player_season_summary(df, player, team, num_matches=None):
         forward_passes = 0
 
     # Shots & Goals
-    shots = player_events[player_events['type'] == 'Shot']
+    shots = get_shots(player_events)
     total_shots = len(shots)
     goals = len(shots[shots['shot_outcome'] == 'Goal'])
     xg = shots['shot_statsbomb_xg'].sum() if not shots.empty else 0
@@ -1496,10 +1525,10 @@ def performance_trend(df, player, team, stat_type='xG'):
         match_name = df[df['match_id'] == match_id]['match_name'].iloc[0] if 'match_name' in df.columns else f"M{match_id+1}"
 
         if stat_type == 'xG':
-            shots = match_events[match_events['type'] == 'Shot']
+            shots = get_shots(match_events)
             value = shots['shot_statsbomb_xg'].sum() if not shots.empty else 0
         elif stat_type == 'Goals':
-            shots = match_events[match_events['type'] == 'Shot']
+            shots = get_shots(match_events)
             value = len(shots[shots['shot_outcome'] == 'Goal'])
         elif stat_type == 'Passes':
             passes = match_events[match_events['type'] == 'Pass']
@@ -1711,7 +1740,7 @@ def _get_player_stats_for_pdf(df, player, team, analysis_type):
         stats['Completed'] = f"{completed} ({round(completed/total*100) if total > 0 else 0}%)"
 
     elif analysis_type == 'Shots':
-        shots = player_events[player_events['type'] == 'Shot']
+        shots = get_shots(player_events)
         goals = len(shots[shots['shot_outcome'] == 'Goal'])
         xg = round(shots['shot_statsbomb_xg'].sum(), 2) if not shots.empty else 0
         stats['Shots'] = len(shots)
@@ -1770,7 +1799,7 @@ def _get_match_stats_for_pdf(df, team1, team2):
 
     for team in [team1, team2]:
         team_events = df[df['team'] == team]
-        shots = team_events[team_events['type'] == 'Shot']
+        shots = get_shots(team_events)
         goals = len(shots[shots['shot_outcome'] == 'Goal'])
         xg = round(shots['shot_statsbomb_xg'].sum(), 2)
         passes = team_events[team_events['type'] == 'Pass']
@@ -1785,7 +1814,7 @@ def _get_match_stats_for_pdf(df, team1, team2):
 def _get_xg_stats_for_pdf(df, team1, team2):
     """Get xG timeline statistics for PDF export."""
     stats = {}
-    shots = df[df['type'] == 'Shot']
+    shots = get_shots(df)
 
     for team in [team1, team2]:
         team_shots = shots[shots['team'] == team]
@@ -1806,7 +1835,7 @@ def _get_comparison_stats_for_pdf(df, player1, team1, player2, team2):
         passes = player_events[player_events['type'] == 'Pass']
         completed_passes = len(passes[passes['pass_outcome'].isnull()])
 
-        shots = player_events[player_events['type'] == 'Shot']
+        shots = get_shots(player_events)
         goals = len(shots[shots['shot_outcome'] == 'Goal'])
 
         dribbles = player_events[player_events['type'] == 'Dribble']
